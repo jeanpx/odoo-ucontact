@@ -1,0 +1,32 @@
+.o_field_phone {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ucontact-call-icon {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 50%;
+  background: #009ddf;
+  color: white;
+  cursor: pointer;
+  margin-left: 4px;
+  padding: 0;
+  flex-shrink: 0;
+  vertical-align: middle;
+  opacity: 0;
+  transition: opacity 0.2s, transform 0.15s;
+}
+
+.o_field_phone:hover .ucontact-call-icon {
+  opacity: 1;
+}
+
+.ucontact-call-icon:hover {
+  transform: scale(1.15);
+}

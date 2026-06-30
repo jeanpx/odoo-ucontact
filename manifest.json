@@ -1,0 +1,45 @@
+{
+  "manifest_version": 3,
+  "name": "uContact NetPhone + Odoo CRM",
+  "version": "1.0.0",
+  "description": "Integración de uContact NetPhone con Odoo. Muestra datos del cliente en tiempo real al marcar o recibir llamadas desde uContact.",
+  "permissions": [
+    "storage",
+    "notifications",
+    "alarms"
+  ],
+  "host_permissions": [
+    "https://*.ucontactcloud.com/*",
+    "https://*.odoo.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://*.ucontactcloud.com/*", "https://*.ucontact.com/*", "https://*.uphone/*"],
+      "js": ["ucontact-content.js"],
+      "css": ["styles.css"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "uContact + Odoo",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>uContact + Odoo</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup-container">
+    <header class="popup-header">
+      <div class="header-left">
+        <div class="logo">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="white">
+            <path d="M6.62 10.79a15.05 15.05 0 006.59 6.59l2.2-2.2a1 1 0 011.01-.24 11.36 11.36 0 003.58.57 1 1 0 011 1V20a1 1 0 01-1 1A17 17 0 013 4a1 1 0 011-1h3.5a1 1 0 011 1 11.36 11.36 0 00.57 3.58 1 1 0 01-.25 1.01l-2.2 2.2z"/>
+          </svg>
+        </div>
+        <span class="title">uContact + Odoo</span>
+      </div>
+      <div class="header-right">
+        <span class="status-dot" id="statusDot"></span>
+        <span class="status-text" id="statusText">---</span>
+      </div>
+    </header>
+
+    <div class="tabs">
+      <button class="tab active" data-tab="dial">Marcar</button>
+      <button class="tab" data-tab="log">Historial</button>
+      <button class="tab" data-tab="settings">Config</button>
+    </div>
+
+    <div class="tab-content" id="tab-dial">
+      <div class="call-display">
+        <input type="tel" id="phoneInput" placeholder="Número" autofocus>
+        <button class="btn-action" id="btnCall">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="white">
+            <path d="M6.62 10.79a15.05 15.05 0 006.59 6.59l2.2-2.2a1 1 0 011.01-.24 11.36 11.36 0 003.58.57 1 1 0 011 1V20a1 1 0 01-1 1A17 17 0 013 4a1 1 0 011-1h3.5a1 1 0 011 1 11.36 11.36 0 00.57 3.58 1 1 0 01-.25 1.01l-2.2 2.2z"/>
+          </svg>
+          <span id="btnCallText">Llamar</span>
+        </button>
+        <button class="btn-action btn-hangup" id="btnHangup" style="display:none">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="white">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+          </svg>
+          Colgar
+        </button>
+      </div>
+
+      <div class="keypad">
+        <button class="key" data-value="1">1<span>.</span></button>
+        <button class="key" data-value="2">2<span>ABC</span></button>
+        <button class="key" data-value="3">3<span>DEF</span></button>
+        <button class="key" data-value="4">4<span>GHI</span></button>
+        <button class="key" data-value="5">5<span>JKL</span></button>
+        <button class="key" data-value="6">6<span>MNO</span></button>
+        <button class="key" data-value="7">7<span>PQRS</span></button>
+        <button class="key" data-value="8">8<span>TUV</span></button>
+        <button class="key" data-value="9">9<span>WXYZ</span></button>
+        <button class="key" data-value="*">*</button>
+        <button class="key" data-value="0">0<span>+</span></button>
+        <button class="key key-backspace" id="btnClear" data-value="backspace">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="#666">
+            <path d="M22 3H7c-.69 0-1.23.35-1.59.88L0 12l5.41 8.11c.36.53.9.89 1.59.89h15c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-3 12.59L17.59 17 14 13.41 10.41 17 9 15.59 12.59 12 9 8.41 10.41 7 14 10.59 17.59 7 19 8.41 15.41 12 19 15.59z"/>
+          </svg>
+        </button>
+      </div>
+
+      <div class="call-status" id="callStatus" style="display:none">
+        <div class="call-status-icon"></div>
+        <div class="call-status-text" id="callStatusText"></div>
+      </div>
+    </div>
+
+    <div class="tab-content" id="tab-log" style="display:none">
+      <div class="log-list" id="callLogList">
+        <div class="log-empty">Sin llamadas registradas</div>
+      </div>
+    </div>
+
+    <div class="tab-content" id="tab-settings" style="display:none">
+      <div class="settings-summary">
+        <div class="setting-item"><span class="setting-label">Servidor</span><span class="setting-value" id="settingServer">---</span></div>
+        <div class="setting-item"><span class="setting-label">Autenticación</span><span class="setting-value" id="settingAuth">---</span></div>
+        <div class="setting-item"><span class="setting-label">Agente</span><span class="setting-value" id="settingAgent">---</span></div>
+        <div class="setting-item"><span class="setting-label">Odoo</span><span class="setting-value" id="settingOdoo">---</span></div>
+      </div>
+      <a href="#" class="settings-link" id="openOptions">⚙ Configuración completa →</a>
+      <button class="btn-secondary" id="btnTestConnection">Probar conexión uContact</button>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
