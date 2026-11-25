@@ -4,6 +4,7 @@ let lastOutputNumber = '';
 let outputDebounceTimer = null;
 const activePopups = [];
 const pendingLookups = {};
+const lookupErrors = {};
 
 console.log('[uContact Odoo] Content script loaded, hostname:', window.location.hostname);
 
@@ -281,9 +282,18 @@ function lookupNumber(number, onResult) {
   chrome.runtime.sendMessage({ action: 'lookupInOdoo', number }).then((contacts) => {
     const cbs = pendingLookups[number] || [];
     delete pendingLookups[number];
+    if (contacts && contacts.error) {
+      // Guardar el error para que showNotFoundPopup lo muestre en vez de "no encontrado"
+      console.error('[uContact Odoo] Lookup error:', contacts.error);
+      lookupErrors[number] = contacts.error;
+      cbs.forEach(cb => cb(null));
+      return;
+    }
+    delete lookupErrors[number];
     cbs.forEach(cb => cb(contacts));
   }).catch((err) => {
     console.error('[uContact Odoo] Lookup error:', err);
+    lookupErrors[number] = 'No se pudo comunicar con la extensión. Recarga la página.';
     const cbs = pendingLookups[number] || [];
     delete pendingLookups[number];
     cbs.forEach(cb => cb(null));
@@ -598,6 +608,7 @@ function hideCustomerPopup() {
 
 function showNotFoundPopup(number, anchorRect) {
   removeLoadingPopups();
+  const errorMsg = lookupErrors[number] || '';
   const popup = document.createElement('div');
   popup.id = 'ucontact-odoo-popup';
   popup.style.cssText = `
@@ -612,21 +623,22 @@ function showNotFoundPopup(number, anchorRect) {
   `;
 
   popup.innerHTML = `
-    <div id="ucontact-popup-header" style="cursor: move; background: linear-gradient(135deg, #888, #555); padding: 14px 20px; display: flex; align-items: center; gap: 12px; user-select: none;">
+    <div id="ucontact-popup-header" style="cursor: move; background: ${errorMsg ? 'linear-gradient(135deg, #e06666, #b03a2e)' : 'linear-gradient(135deg, #888, #555)'}; padding: 14px 20px; display: flex; align-items: center; gap: 12px; user-select: none;">
       <div style="width: 36px; height: 36px; border-radius: 50%; background: rgba(255,255,255,0.2); display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
         <svg viewBox="0 0 24 24" width="20" height="20" fill="white">
           <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
         </svg>
       </div>
       <div style="flex:1;">
-        <div style="font-size: 15px; font-weight: 600; color: white;">Cliente no encontrado</div>
+        <div style="font-size: 15px; font-weight: 600; color: white;">${errorMsg ? 'Error al consultar Odoo' : 'Cliente no encontrado'}</div>
         <div style="font-size: 12px; color: rgba(255,255,255,0.7); margin-top: 1px;">${escapeHtml(number)}</div>
       </div>
       <button id="ucontact-popup-close" style="background: rgba(255,255,255,0.15); border: none; border-radius: 50%; width: 26px; height: 26px; color: white; font-size: 14px; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">✕</button>
     </div>
     <div style="padding: 20px; text-align: center;">
+      ${errorMsg ? `<div style="font-size: 13px; color: #b03a2e; word-wrap: break-word;">${escapeHtml(errorMsg)}</div>` : `
       <div style="font-size: 13px; color: #888; margin-bottom: 4px;">El número no está registrado</div>
-      <div style="font-size: 12px; color: #aaa;">en Odoo como contacto</div>
+      <div style="font-size: 12px; color: #aaa;">en Odoo como contacto</div>`}
     </div>
   `;
 

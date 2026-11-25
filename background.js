@@ -11,7 +11,8 @@ let state = {
   lastLookupResult: null,
   lastLookupTime: 0,
   lastOdooAuth: null,
-  lastOdooAuthTime: 0
+  lastOdooAuthTime: 0,
+  partnerFields: null
 };
 
 async function getConfig() {
@@ -147,6 +148,12 @@ async function lookupInOdoo(number) {
     records = await lookupViaJsonRpc(config, clean);
   } else {
     console.log('[Odoo Lookup] Odoo not configured');
+    return { error: 'Odoo no está configurado. Abre las opciones de la extensión.' };
+  }
+
+  if (records && records.error) {
+    console.log('[Odoo Lookup] Error:', records.error);
+    return records;
   }
 
   if (records && records.length > 0) {
@@ -202,7 +209,7 @@ async function authenticateOdoo(config) {
   return state.lastOdooAuth;
 }
 
-async function odooSearch(config, session, model, domain, fields, limit, order) {
+async function odooCall(config, model, method, args, kwargs, retried) {
   const baseUrl = config.odooUrl.replace(/\/+$/, '');
 
   const controller = new AbortController();
@@ -217,31 +224,52 @@ async function odooSearch(config, session, model, domain, fields, limit, order) 
       signal: controller.signal,
       body: JSON.stringify({
         jsonrpc: '2.0', method: 'call',
-        params: {
-          model: model,
-          method: 'search_read',
-          args: [domain],
-          kwargs: order ? { fields, limit, order } : { fields, limit }
-        }
+        params: { model, method, args, kwargs: kwargs || {} }
       })
     });
     clearTimeout(timeout);
 
     const text = await res.text();
+    let parsed;
     try {
-      const parsed = JSON.parse(text);
-      if (parsed.error) console.log('[Odoo Search] Error response:', model, parsed.error.message);
-      else console.log('[Odoo Search] Results count:', model, parsed.result?.length || 0);
-      return parsed;
+      parsed = JSON.parse(text);
     } catch (e) {
-      console.log('[Odoo Search] Parse error:', model, text.substring(0, 100));
-      return { error: { message: text.substring(0, 200) } };
+      console.log('[Odoo Call] Parse error:', model, method, text.substring(0, 100));
+      return { error: { message: `Respuesta inválida de Odoo (HTTP ${res.status})` } };
     }
+    if (parsed.error) {
+      const msg = parsed.error.data?.message || parsed.error.message || 'Error desconocido';
+      console.log('[Odoo Call] Error response:', model, method, msg);
+      // La sesión del navegador pudo expirar o cambiar: re-autenticar una vez
+      if (!retried && /session/i.test(parsed.error.data?.name || '')) {
+        state.lastOdooAuth = null;
+        state.lastOdooAuthTime = 0;
+        if (await authenticateOdoo(config)) return odooCall(config, model, method, args, kwargs, true);
+      }
+      return { error: { message: msg } };
+    }
+    return parsed;
   } catch (e) {
     clearTimeout(timeout);
-    console.error('[Odoo Search] Fetch error:', model, e.message);
-    return { error: { message: e.message } };
+    console.error('[Odoo Call] Fetch error:', model, method, e.message);
+    return { error: { message: e.name === 'AbortError' ? 'Odoo no respondió a tiempo' : e.message } };
   }
+}
+
+async function odooSearch(config, session, model, domain, fields, limit, order) {
+  const data = await odooCall(config, model, 'search_read', [domain], order ? { fields, limit, order } : { fields, limit });
+  if (!data.error) console.log('[Odoo Search] Results count:', model, data.result?.length || 0);
+  return data;
+}
+
+// Detecta qué campos existen en res.partner (p. ej. `mobile` ya no existe en versiones recientes de Odoo)
+async function getPartnerFields(config) {
+  if (state.partnerFields) return state.partnerFields;
+  const data = await odooCall(config, 'res.partner', 'fields_get', [], { attributes: ['type'] });
+  if (data.error) return { error: data.error.message };
+  state.partnerFields = Object.keys(data.result || {});
+  console.log('[Odoo Lookup] res.partner phone fields:', ['phone', 'mobile', 'phone_mobile_search'].filter(f => state.partnerFields.includes(f)));
+  return state.partnerFields;
 }
 
 async function fetchSaleOrders(config, session, partnerId) {
@@ -321,77 +349,95 @@ async function fetchLastInvoices(config, session, partnerId) {
   return [];
 }
 
+function orDomain(fields, op, value) {
+  const leaves = fields.map(f => [f, op, value]);
+  return [...Array(Math.max(0, leaves.length - 1)).fill('|'), ...leaves];
+}
+
+// Menor = mejor coincidencia; null = no coincide. Revisa TODOS los teléfonos del contacto.
+function phoneMatchScore(rec, phoneFields, clean) {
+  let best = null;
+  for (const f of phoneFields) {
+    const d = String(rec[f] || '').replace(/[^0-9]/g, '');
+    if (d.length < 7) continue;
+    let score = null;
+    if (d === clean) score = 0;
+    else if (d.endsWith(clean) || clean.endsWith(d)) score = Math.abs(d.length - clean.length);
+    if (score !== null && score <= 4 && (best === null || score < best)) best = score;
+  }
+  return best;
+}
+
 async function lookupViaJsonRpc(config, cleanNumber) {
   try {
     const session = await authenticateOdoo(config);
     if (!session) {
       console.log('[Odoo Lookup] Auth failed');
-      return [];
+      return { error: 'No se pudo iniciar sesión en Odoo. Revisa usuario, contraseña/API Key y base de datos en las opciones.' };
     }
 
-    const fields = ['id', 'name', 'phone', 'mobile', 'email', 'company_name', 'street', 'street2', 'city', 'state_id', 'country_id', 'category_id', 'function', 'website'];
+    const available = await getPartnerFields(config);
+    if (available.error) return { error: `Error al leer contactos de Odoo: ${available.error}` };
 
-    // Generate grouped LIKE patterns to handle formatted numbers like "+51 994 390 407"
-    // Each group of digits separated by % matches any characters (spaces, dashes, etc.)
-    // This is more precise than putting % between EVERY digit (which allows other digits to appear)
-    const groupedPatterns = buildGroupedPatterns(cleanNumber);
-    console.log('[Odoo Lookup] Trying', groupedPatterns.length, 'patterns');
+    const phoneFields = ['phone', 'mobile'].filter(f => available.includes(f));
+    const wanted = ['id', 'name', 'phone', 'mobile', 'email', 'company_name', 'street', 'street2', 'city', 'state_id', 'country_id', 'category_id', 'function', 'website'];
+    const fields = wanted.filter(f => available.includes(f));
 
-    for (const pattern of groupedPatterns) {
-      console.log('[Odoo Lookup] LIKE pattern:', pattern);
-      const data = await odooSearch(config, session, 'res.partner',
-        ['|', ['phone', '=like', pattern], ['mobile', '=like', pattern]],
-        fields, 10
-      );
-      if (data.result?.length > 0) {
-        const isSuffix = pattern.startsWith('%') && !pattern.endsWith('%') && pattern.slice(1).indexOf('%') === -1;
-        const searchSuffix = isSuffix ? pattern.slice(1) : '';
-        for (const rec of data.result) {
-          const rawPhone = (rec.phone || rec.mobile || '').replace(/[^0-9]/g, '');
-          if (isSuffix && !rawPhone.endsWith(searchSuffix)) {
-            rec._skip = true;
-            continue;
-          }
-          rec._matchDiff = Math.abs(rawPhone.length - cleanNumber.length);
-          rec._endsWithSearch = rawPhone.endsWith(cleanNumber);
-          rec._includesSearch = rawPhone.includes(cleanNumber);
-        }
-        const valid = data.result.filter(r => !r._skip).sort((a, b) => {
-          if (a._matchDiff !== b._matchDiff) return a._matchDiff - b._matchDiff;
-          if (a._endsWithSearch !== b._endsWithSearch) return a._endsWithSearch ? -1 : 1;
-          if (a._includesSearch !== b._includesSearch) return a._includesSearch ? -1 : 1;
-          return 0;
-        });
-        let maxDiff = isSuffix ? 2 : 1;
-        if (valid.length > 0) {
-          if (valid[0]._endsWithSearch) maxDiff = 4;
-          else if (valid[0]._includesSearch) maxDiff = 5;
-        }
-        if (valid.length > 0 && valid[0]._matchDiff <= maxDiff) {
-          console.log('[Odoo Lookup] Found with pattern:', pattern, valid.length, 'matches, best diff:', valid[0]._matchDiff, 'endsWithSearch:', valid[0]._endsWithSearch, 'includesSearch:', valid[0]._includesSearch);
-          const best = valid[0];
-          const [orders, tasks, tickets, customTickets, debt, lastInvoices] = await Promise.all([
-            fetchSaleOrders(config, session, best.id).catch(e => { console.error('[Odoo] Orders error:', e); return []; }),
-            fetchTasks(config, session, best.id).catch(e => { console.error('[Odoo] Tasks error:', e); return []; }),
-            fetchTickets(config, session, best.id).catch(e => { console.error('[Odoo] Tickets error:', e); return []; }),
-            fetchCustomTickets(config, session, best.id).catch(e => { console.error('[Odoo] CustomTickets error:', e); return []; }),
-            fetchDebt(config, session, best.id).catch(e => { console.error('[Odoo] Debt error:', e); return { invoiceCount: 0, totalDebt: 0 }; }),
-            fetchLastInvoices(config, session, best.id).catch(e => { console.error('[Odoo] Last invoices error:', e); return []; })
-          ]);
-          best._saleOrders = orders || [];
-          best._tasks = tasks || [];
-          best._tickets = tickets || [];
-          best._customTickets = customTickets || [];
-          best._debt = debt || { invoiceCount: 0, totalDebt: 0 };
-          best._lastInvoices = lastInvoices || [];
-          return valid;
-        }
-        console.log('[Odoo Lookup] Pattern matched but no good match, trying next');
+    // Búsquedas en orden de preferencia
+    const domains = [];
+    if (available.includes('phone_mobile_search')) {
+      // Campo de Odoo que ignora espacios, guiones y "+" (p. ej. "+51 917 669 478")
+      domains.push([['phone_mobile_search', 'ilike', cleanNumber.slice(-9)]]);
+    }
+    if (phoneFields.length > 0) {
+      for (const pattern of buildGroupedPatterns(cleanNumber)) {
+        domains.push(orDomain(phoneFields, '=like', pattern));
       }
     }
 
+    let lastError = null;
+    for (const domain of domains) {
+      console.log('[Odoo Lookup] Domain:', JSON.stringify(domain));
+      const data = await odooSearch(config, session, 'res.partner', domain, fields, 20);
+      if (data.error) { lastError = data.error.message; continue; }
+      if (!data.result?.length) continue;
+
+      const valid = data.result
+        .map(r => ({ r, score: phoneMatchScore(r, phoneFields, cleanNumber) }))
+        .filter(x => x.score !== null)
+        .sort((a, b) => a.score - b.score)
+        .map(x => x.r);
+      if (valid.length === 0) {
+        console.log('[Odoo Lookup] Results did not match closely, trying next');
+        continue;
+      }
+
+      console.log('[Odoo Lookup] Found', valid.length, 'matches, best:', valid[0].name);
+      const best = valid[0];
+      const [orders, tasks, tickets, customTickets, debt, lastInvoices] = await Promise.all([
+        fetchSaleOrders(config, session, best.id).catch(e => { console.error('[Odoo] Orders error:', e); return []; }),
+        fetchTasks(config, session, best.id).catch(e => { console.error('[Odoo] Tasks error:', e); return []; }),
+        fetchTickets(config, session, best.id).catch(e => { console.error('[Odoo] Tickets error:', e); return []; }),
+        fetchCustomTickets(config, session, best.id).catch(e => { console.error('[Odoo] CustomTickets error:', e); return []; }),
+        fetchDebt(config, session, best.id).catch(e => { console.error('[Odoo] Debt error:', e); return { invoiceCount: 0, totalDebt: 0 }; }),
+        fetchLastInvoices(config, session, best.id).catch(e => { console.error('[Odoo] Last invoices error:', e); return []; })
+      ]);
+      best._saleOrders = orders || [];
+      best._tasks = tasks || [];
+      best._tickets = tickets || [];
+      best._customTickets = customTickets || [];
+      best._debt = debt || { invoiceCount: 0, totalDebt: 0 };
+      best._lastInvoices = lastInvoices || [];
+      return valid;
+    }
+
     console.log('[Odoo Lookup] No matches found');
-  } catch (e) { console.error('[Odoo Lookup] Error:', e); }
+    // Si las búsquedas fallaron con error, no es "cliente no encontrado"
+    if (lastError) return { error: `Error al buscar en Odoo: ${lastError}` };
+  } catch (e) {
+    console.error('[Odoo Lookup] Error:', e);
+    return { error: `Error al buscar en Odoo: ${e.message}` };
+  }
   return [];
 }
 
