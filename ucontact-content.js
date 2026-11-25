@@ -262,11 +262,12 @@ function showCustomerPopup(contacts, number, anchorRect) {
         </div>
       </div>
 
-      ${invoices.length ? `
-        <div style="padding-top:10px;border-top:1px solid #f1f3f4;">
-          <div style="${label}">Últimas facturas</div>
-          ${invoices.map(invoiceCard).join('')}
-        </div>` : ''}`;
+      <div style="padding-top:10px;border-top:1px solid #f1f3f4;">
+        <div style="${label}">Últimas facturas</div>
+        ${invoices.length
+          ? invoices.map(invoiceCard).join('')
+          : `<div style="font-size:12px;color:${contact._invoicesError ? '#d93025' : '#9aa0a6'};padding-bottom:6px;">${contact._invoicesError ? 'No se pudieron cargar las facturas: ' + escapeHtml(contact._invoicesError) : 'Sin facturas registradas'}</div>`}
+      </div>`;
   };
 
   const legend = shown.some(c => (c._lastInvoices || []).length) ? `

@@ -346,7 +346,8 @@ async function fetchLastInvoices(config, session, partnerId) {
       [['partner_id', '=', partnerId], ['move_type', '=', 'out_invoice'], ['state', '=', 'posted']],
       fields, 5, 'invoice_date desc, id desc'
     );
-    if (!data.result?.length) return [];
+    if (data.error) { console.error('[Odoo Last Invoices] Error:', data.error.message); return { error: data.error.message }; }
+    if (!data.result?.length) { console.log('[Odoo Last Invoices] Sin facturas publicadas para partner', partnerId); return []; }
     const invoices = data.result;
 
     // Líneas: descripción (p. ej. "BAJA INTERNET: 01-11-26 - 24-11-26") y enlace a suscripción / pedido
@@ -550,7 +551,8 @@ async function lookupViaJsonRpc(config, cleanNumber) {
         ]);
         c._saleOrders = orders || [];
         c._debt = debt || { invoiceCount: 0, totalDebt: 0 };
-        c._lastInvoices = lastInvoices || [];
+        c._invoicesError = lastInvoices?.error || null;
+        c._lastInvoices = Array.isArray(lastInvoices) ? lastInvoices : [];
       }));
       return top;
     }
