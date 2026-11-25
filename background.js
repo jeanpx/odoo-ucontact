@@ -375,6 +375,11 @@ async function fetchLastInvoices(config, session, partnerId) {
     invoices.forEach(inv => {
       inv.sub = inv.sub || { subOrder: '', code: '', state: '', reason: '' };
       if (!inv.sub.code) inv.sub.code = inv.x_studio_nro_suscripcion || '';
+    });
+    try { await fillSubOrderFromSaleOrder(config, invoices); }
+    catch (e) { console.error('[Odoo Subscriptions] Sub order error:', e); }
+
+    invoices.forEach(inv => {
       if (stateField) {
         const v = inv[stateField];
         const shown = Array.isArray(v) ? v[1]
@@ -390,6 +395,30 @@ async function fetchLastInvoices(config, session, partnerId) {
 }
 
 const m2oId = v => Array.isArray(v) ? v[0] : (v || null);
+
+// Sub order (x_studio_subs_order) está en el pedido de la suscripción, p. ej. "MEN/2645510" para el código 2645510
+async function fillSubOrderFromSaleOrder(config, invoices) {
+  const soFields = await modelFields(config, 'sale.order');
+  if (!soFields?.x_studio_subs_order) return;
+  const pending = invoices.filter(inv => !inv.sub.subOrder && (inv.sub.code || inv.invoice_origin));
+  if (!pending.length) return;
+  const codes = [...new Set(pending.map(inv => String(inv.sub.code || '')).filter(Boolean))];
+  const origins = [...new Set(pending.map(inv => inv.invoice_origin).filter(Boolean))];
+  const leaves = [...codes.map(c => ['name', '=like', `%/${c}`]), ...codes.map(c => ['name', '=', c]), ...(origins.length ? [['name', 'in', origins]] : [])];
+  if (!leaves.length) return;
+  const domain = [...Array(leaves.length - 1).fill('|'), ...leaves];
+  const data = await odooCall(config, 'sale.order', 'search_read', [domain], { fields: ['name', 'x_studio_subs_order'], limit: 50 });
+  if (data.error) { console.log('[Odoo Subscriptions] Sub order search error:', data.error.message); return; }
+  const byName = {};
+  (data.result || []).forEach(o => { byName[o.name] = o; });
+  const find = (inv) => byName[inv.invoice_origin]
+    || (data.result || []).find(o => inv.sub.code && (o.name === String(inv.sub.code) || o.name.endsWith('/' + inv.sub.code)));
+  pending.forEach(inv => {
+    const o = find(inv);
+    if (o && o.x_studio_subs_order !== false && o.x_studio_subs_order != null) inv.sub.subOrder = String(o.x_studio_subs_order);
+  });
+  console.log('[Odoo Subscriptions] Sub order desde sale.order:', (data.result || []).map(o => `${o.name}=${o.x_studio_subs_order}`));
+}
 
 // Campos existentes de un modelo (null si el modelo no existe o no hay acceso). Cacheado.
 async function modelFields(config, model) {
