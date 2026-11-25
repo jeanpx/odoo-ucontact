@@ -203,36 +203,51 @@ function showCustomerPopup(contacts, number, anchorRect) {
   }
   removeLoadingPopups();
 
-  const contact = contacts[0];
-  const addresses = serviceAddresses(contact);
-  const totalDebt = contact._debt ? Number(contact._debt.totalDebt || 0) : 0;
-  const debtCount = contact._debt ? (contact._debt.invoiceCount || 0) : 0;
-  const docType = Array.isArray(contact.l10n_latam_identification_type_id) ? contact.l10n_latam_identification_type_id[1] : 'DNI';
-  const phone = contact.mobile || contact.phone || '';
-  const meta = [contact.vat ? `${docType} ${contact.vat}` : '', phone].filter(Boolean);
+  const shown = contacts.slice(0, 2);
   const label = 'font-size:11px;color:#9aa0a6;text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px;';
+  const anyDebt = shown.some(c => c._debt && Number(c._debt.totalDebt || 0) > 0);
 
-  const popup = document.createElement('div');
-  popup.id = 'ucontact-odoo-popup';
-  popup.style.cssText = `
-    position: fixed; z-index: 2147483647; width: 340px; max-height: calc(100vh - 40px);
-    background: #fff; border-radius: 10px; border-top: 3px solid ${totalDebt > 0 ? '#d93025' : '#1e8e3e'};
-    box-shadow: 0 6px 24px rgba(0,0,0,.16);
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    font-size: 13px; color: #202124; line-height: 1.4;
-    overflow-y: auto; overflow-x: hidden; animation: ucontactPopupIn .2s ease-out;
-  `;
+  const headerOf = (contact) => {
+    const docType = Array.isArray(contact.l10n_latam_identification_type_id) ? contact.l10n_latam_identification_type_id[1] : 'DNI';
+    const phone = contact.mobile || contact.phone || '';
+    const meta = [contact.vat ? `${docType} ${contact.vat}` : '', phone].filter(Boolean);
+    return `<div style="font-size:15px;font-weight:600;">${escapeHtml(contact.name)}</div>
+      ${meta.length ? `<div style="font-size:12px;color:#5f6368;margin-top:2px;">${meta.map(escapeHtml).join(' · ')}</div>` : ''}`;
+  };
 
-  popup.innerHTML = `
-    <div id="ucontact-popup-header" style="cursor:move;user-select:none;padding:14px 16px 10px;display:flex;gap:8px;align-items:flex-start;">
-      <div style="flex:1;min-width:0;">
-        <div style="font-size:15px;font-weight:600;">${escapeHtml(contact.name)}</div>
-        ${meta.length ? `<div style="font-size:12px;color:#5f6368;margin-top:2px;">${meta.map(escapeHtml).join(' · ')}</div>` : ''}
+  const invoiceCard = (inv) => {
+    const st = invoiceStatus(inv.payment_state);
+    const lines = inv.lines || [];
+    return `<div data-invoice-id="${inv.id}" title="${st.label} · Abrir en Odoo" style="background:#f8f9fb;border:1px solid #e3e6eb;border-radius:10px;padding:10px 12px;margin-bottom:8px;cursor:pointer;transition:background .15s;">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span style="width:8px;height:8px;border-radius:50%;background:${st.text};flex-shrink:0;"></span>
+        <span style="flex:1;min-width:0;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(inv.name)}</span>
+        <span style="font-weight:700;">S/ ${Number(inv.amount_total || 0).toFixed(2)}</span>
       </div>
-      <button id="ucontact-popup-close" title="Cerrar" style="background:none;border:none;color:#9aa0a6;font-size:16px;cursor:pointer;padding:0 2px;line-height:1;">✕</button>
-    </div>
+      ${lines.map(l => `<div style="color:#5f6368;font-size:12px;margin:4px 0 0 16px;">${escapeHtml(l)}</div>`).join('')}
+      ${inv.sub && (inv.sub.subOrder || inv.sub.code || inv.sub.state || inv.sub.reason) ? `
+        <div style="display:grid;grid-template-columns:1fr 1.4fr 1.2fr;gap:4px;margin:8px 0 0 16px;padding-top:8px;border-top:1px solid #e3e6eb;font-size:11px;">
+          ${[['Sub order', inv.sub.subOrder], ['Cod. suscripción', inv.sub.code], ['Estado sus.', inv.sub.state]]
+            .map(([k, v]) => `<div style="min-width:0;"><div style="color:#9aa0a6;">${k}</div><div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(String(v || '—'))}</div></div>`).join('')}
+        </div>
+        ${inv.sub.reason && !/activ|progres|curso/i.test(inv.sub.state || '') ? `<div style="margin:6px 0 0 16px;font-size:11px;"><span style="color:#9aa0a6;">Motivo de baja:</span> <span style="font-weight:600;">${escapeHtml(inv.sub.reason)}</span></div>` : ''}` : ''}
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin:8px 0 0 16px;padding-top:8px;border-top:1px solid #e3e6eb;font-size:11px;">
+        ${[
+          ['Emisión', ld(inv.invoice_date) || '—', '#202124'],
+          ['Vence', ld(inv.invoice_date_due) || '—', '#202124'],
+          ['Saldo', `S/ ${Number(inv.amount_residual || 0).toFixed(2)}`, Number(inv.amount_residual || 0) > 0 ? '#d93025' : '#1e8e3e'],
+          ['Estado', st.label, st.text]
+        ].map(([k, v, c]) => `<div style="min-width:0;"><div style="color:#9aa0a6;">${k}</div><div style="font-weight:600;color:${c};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(v)}</div></div>`).join('')}
+      </div>
+    </div>`;
+  };
 
-    <div style="padding:0 16px 14px;">
+  const bodyOf = (contact) => {
+    const addresses = serviceAddresses(contact);
+    const totalDebt = contact._debt ? Number(contact._debt.totalDebt || 0) : 0;
+    const debtCount = contact._debt ? (contact._debt.invoiceCount || 0) : 0;
+    const invoices = contact._lastInvoices || [];
+    return `
       ${addresses.length ? `
         <div style="padding:10px 0;border-top:1px solid #f1f3f4;">
           <div style="${label}">Dirección</div>
@@ -247,39 +262,50 @@ function showCustomerPopup(contacts, number, anchorRect) {
         </div>
       </div>
 
-      ${contact._lastInvoices && contact._lastInvoices.length ? `
+      ${invoices.length ? `
         <div style="padding-top:10px;border-top:1px solid #f1f3f4;">
           <div style="${label}">Últimas facturas</div>
-          ${contact._lastInvoices.map(inv => {
-            const st = invoiceStatus(inv.payment_state);
-            const lines = inv.lines || [];
-            return `<div data-invoice-id="${inv.id}" title="${st.label} · Abrir en Odoo" style="background:#f8f9fb;border:1px solid #e3e6eb;border-radius:10px;padding:10px 12px;margin-bottom:8px;cursor:pointer;transition:background .15s;">
-              <div style="display:flex;align-items:center;gap:8px;">
-                <span style="width:8px;height:8px;border-radius:50%;background:${st.text};flex-shrink:0;"></span>
-                <span style="flex:1;min-width:0;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(inv.name)}</span>
-                <span style="font-weight:700;">S/ ${Number(inv.amount_total || 0).toFixed(2)}</span>
-              </div>
-              ${lines.map(l => `<div style="color:#5f6368;font-size:12px;margin:4px 0 0 16px;">${escapeHtml(l)}</div>`).join('')}
-              ${inv.sub && (inv.sub.subOrder || inv.sub.code || inv.sub.state || inv.sub.reason) ? `
-                <div style="display:grid;grid-template-columns:1fr 1.4fr 1.2fr;gap:4px;margin:8px 0 0 16px;padding-top:8px;border-top:1px solid #e3e6eb;font-size:11px;">
-                  ${[['Sub order', inv.sub.subOrder], ['Cod. suscripción', inv.sub.code], ['Estado sus.', inv.sub.state]]
-                    .map(([k, v]) => `<div style="min-width:0;"><div style="color:#9aa0a6;">${k}</div><div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(String(v || '—'))}</div></div>`).join('')}
-                </div>
-                ${inv.sub.reason && !/activ|progres|curso/i.test(inv.sub.state || '') ? `<div style="margin:6px 0 0 16px;font-size:11px;"><span style="color:#9aa0a6;">Motivo de baja:</span> <span style="font-weight:600;">${escapeHtml(inv.sub.reason)}</span></div>` : ''}` : ''}
-              <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin:8px 0 0 16px;padding-top:8px;border-top:1px solid #e3e6eb;font-size:11px;">
-                ${[
-                  ['Emisión', ld(inv.invoice_date) || '—', '#202124'],
-                  ['Vence', ld(inv.invoice_date_due) || '—', '#202124'],
-                  ['Saldo', `S/ ${Number(inv.amount_residual || 0).toFixed(2)}`, Number(inv.amount_residual || 0) > 0 ? '#d93025' : '#1e8e3e'],
-                  ['Estado', st.label, st.text]
-                ].map(([k, v, c]) => `<div style="min-width:0;"><div style="color:#9aa0a6;">${k}</div><div style="font-weight:600;color:${c};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(v)}</div></div>`).join('')}
-              </div>
-            </div>`;
-          }).join('')}
-          <div style="display:flex;gap:12px;margin-top:6px;font-size:11px;color:#9aa0a6;">
-            ${['paid', 'partial', 'not_paid'].map(k => { const s = invoiceStatus(k); return `<span><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${s.text};margin-right:4px;vertical-align:middle;"></span>${s.label}</span>`; }).join('')}
-          </div>
-        </div>` : ''}
+          ${invoices.map(invoiceCard).join('')}
+        </div>` : ''}`;
+  };
+
+  const legend = shown.some(c => (c._lastInvoices || []).length) ? `
+    <div style="display:flex;gap:12px;margin-top:6px;font-size:11px;color:#9aa0a6;">
+      ${['paid', 'partial', 'not_paid'].map(k => { const s = invoiceStatus(k); return `<span><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${s.text};margin-right:4px;vertical-align:middle;"></span>${s.label}</span>`; }).join('')}
+    </div>` : '';
+
+  const multi = shown.length > 1;
+
+  const popup = document.createElement('div');
+  popup.id = 'ucontact-odoo-popup';
+  popup.style.cssText = `
+    position: fixed; z-index: 2147483647; width: 340px; max-height: calc(100vh - 40px);
+    background: #fff; border-radius: 10px; border-top: 3px solid ${anyDebt ? '#d93025' : '#1e8e3e'};
+    box-shadow: 0 6px 24px rgba(0,0,0,.16);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 13px; color: #202124; line-height: 1.4;
+    overflow-y: auto; overflow-x: hidden; animation: ucontactPopupIn .2s ease-out;
+  `;
+
+  popup.innerHTML = `
+    <div id="ucontact-popup-header" style="cursor:move;user-select:none;padding:14px 16px 10px;display:flex;gap:8px;align-items:flex-start;">
+      <div style="flex:1;min-width:0;">
+        ${multi
+          ? `<div style="font-size:12px;font-weight:600;color:#5f6368;">${shown.length} contactos con este número</div>`
+          : headerOf(shown[0])}
+      </div>
+      <button id="ucontact-popup-close" title="Cerrar" style="background:none;border:none;color:#9aa0a6;font-size:16px;cursor:pointer;padding:0 2px;line-height:1;">✕</button>
+    </div>
+
+    <div style="padding:0 16px 14px;">
+      ${multi
+        ? shown.map(c => `
+          <div style="border:1px solid #e3e6eb;border-radius:12px;padding:12px 12px 4px;margin-bottom:10px;">
+            <div style="padding-bottom:8px;">${headerOf(c)}</div>
+            ${bodyOf(c)}
+          </div>`).join('')
+        : bodyOf(shown[0])}
+      ${legend}
     </div>
   `;
 

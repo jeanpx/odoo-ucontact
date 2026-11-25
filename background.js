@@ -540,16 +540,19 @@ async function lookupViaJsonRpc(config, cleanNumber) {
       }
 
       console.log('[Odoo Lookup] Found', valid.length, 'matches, best:', valid[0].name);
-      const best = valid[0];
-      const [orders, debt, lastInvoices] = await Promise.all([
-        fetchSaleOrders(config, session, best.id).catch(e => { console.error('[Odoo] Orders error:', e); return []; }),
-        fetchDebt(config, session, best.id).catch(e => { console.error('[Odoo] Debt error:', e); return { invoiceCount: 0, totalDebt: 0 }; }),
-        fetchLastInvoices(config, session, best.id).catch(e => { console.error('[Odoo] Last invoices error:', e); return []; })
-      ]);
-      best._saleOrders = orders || [];
-      best._debt = debt || { invoiceCount: 0, totalDebt: 0 };
-      best._lastInvoices = lastInvoices || [];
-      return valid;
+      // Hasta 2 contactos con el mismo número, cada uno con su deuda y facturas
+      const top = valid.slice(0, 2);
+      await Promise.all(top.map(async (c) => {
+        const [orders, debt, lastInvoices] = await Promise.all([
+          fetchSaleOrders(config, session, c.id).catch(e => { console.error('[Odoo] Orders error:', e); return []; }),
+          fetchDebt(config, session, c.id).catch(e => { console.error('[Odoo] Debt error:', e); return { invoiceCount: 0, totalDebt: 0 }; }),
+          fetchLastInvoices(config, session, c.id).catch(e => { console.error('[Odoo] Last invoices error:', e); return []; })
+        ]);
+        c._saleOrders = orders || [];
+        c._debt = debt || { invoiceCount: 0, totalDebt: 0 };
+        c._lastInvoices = lastInvoices || [];
+      }));
+      return top;
     }
 
     console.log('[Odoo Lookup] No matches found');
