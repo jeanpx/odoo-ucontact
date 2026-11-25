@@ -340,10 +340,28 @@ async function fetchLastInvoices(config, session, partnerId) {
   try {
     const data = await odooSearch(config, session, 'account.move',
       [['partner_id', '=', partnerId], ['move_type', '=', 'out_invoice'], ['state', '=', 'posted']],
-      ['name', 'invoice_date', 'invoice_date_due', 'amount_total', 'amount_residual', 'payment_state', 'currency_id'], 5,
+      ['name', 'invoice_date', 'invoice_date_due', 'amount_total', 'amount_residual', 'payment_state', 'currency_id', 'invoice_line_ids'], 5,
       'invoice_date desc, id desc'
     );
-    if (data.result?.length > 0) return data.result;
+    if (data.result?.length > 0) {
+      const invoices = data.result;
+      // Descripción de cada factura = nombre de sus líneas (p. ej. "BAJA INTERNET: 01-11-26 - 24-11-26")
+      const lineIds = invoices.flatMap(inv => inv.invoice_line_ids || []);
+      if (lineIds.length) {
+        try {
+          const lines = await odooCall(config, 'account.move.line', 'read', [lineIds], { fields: ['name', 'move_id', 'display_type'] });
+          const byMove = {};
+          (lines.result || []).forEach(l => {
+            if (!l.name || ['line_section', 'line_note'].includes(l.display_type)) return;
+            const moveId = Array.isArray(l.move_id) ? l.move_id[0] : l.move_id;
+            (byMove[moveId] = byMove[moveId] || []).push(l.name.trim());
+          });
+          invoices.forEach(inv => { inv.lines = byMove[inv.id] || []; });
+        } catch (e) { console.error('[Odoo Last Invoices] Lines error:', e); }
+      }
+      invoices.forEach(inv => delete inv.invoice_line_ids);
+      return invoices;
+    }
   } catch (e) { console.error('[Odoo Last Invoices] Error:', e); }
   return [];
 }

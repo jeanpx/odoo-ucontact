@@ -252,11 +252,16 @@ function showCustomerPopup(contacts, number, anchorRect) {
           <div style="${label}">Últimas facturas</div>
           ${contact._lastInvoices.map(inv => {
             const st = invoiceStatus(inv.payment_state);
-            return `<div data-invoice-id="${inv.id}" title="Abrir en Odoo" style="display:flex;align-items:center;gap:8px;padding:4px 0;cursor:pointer;">
-              <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(inv.name)}</span>
-              <span style="color:#9aa0a6;font-size:12px;">${ld(inv.invoice_date)}</span>
-              <span style="width:68px;text-align:right;">S/ ${Number(inv.amount_total || 0).toFixed(2)}</span>
-              <span title="${st.label}" style="width:8px;height:8px;border-radius:50%;background:${st.text};flex-shrink:0;"></span>
+            const lines = inv.lines || [];
+            return `<div data-invoice-id="${inv.id}" title="${st.label} · Abrir en Odoo" style="background:#f8f9fb;border:1px solid #e3e6eb;border-radius:10px;padding:10px 12px;margin-bottom:8px;cursor:pointer;transition:background .15s;">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span style="width:8px;height:8px;border-radius:50%;background:${st.text};flex-shrink:0;"></span>
+                <span style="flex:1;min-width:0;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(inv.name)}</span>
+                <span style="font-weight:700;">S/ ${Number(inv.amount_total || 0).toFixed(2)}</span>
+              </div>
+              ${lines.length
+                ? lines.map(l => `<div style="color:#5f6368;font-size:12px;margin:4px 0 0 16px;">${escapeHtml(l)}</div>`).join('')
+                : `<div style="color:#5f6368;font-size:12px;margin:4px 0 0 16px;">${ld(inv.invoice_date)}</div>`}
             </div>`;
           }).join('')}
           <div style="display:flex;gap:12px;margin-top:6px;font-size:11px;color:#9aa0a6;">
@@ -272,8 +277,8 @@ function showCustomerPopup(contacts, number, anchorRect) {
   });
 
   popup.querySelectorAll('[data-invoice-id]').forEach(row => {
-    row.addEventListener('mouseenter', () => { row.style.background = '#f8f9fa'; });
-    row.addEventListener('mouseleave', () => { row.style.background = ''; });
+    row.addEventListener('mouseenter', () => { row.style.background = '#eef1f5'; });
+    row.addEventListener('mouseleave', () => { row.style.background = '#f8f9fb'; });
     row.addEventListener('click', () => {
       chrome.runtime.sendMessage({ action: 'openInOdoo', model: 'account.move', id: parseInt(row.dataset.invoiceId), viewType: 'form' });
     });
