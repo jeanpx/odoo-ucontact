@@ -233,11 +233,10 @@ function showCustomerPopup(contacts, number, anchorRect) {
             .map(([k, v]) => `<div style="min-width:0;"><div style="color:#9aa0a6;">${k}</div><div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(String(v || '—'))}</div></div>`).join('')}
         </div>
         ${inv.sub.reason && !/activ|progres|curso/i.test(inv.sub.state || '') ? `<div style="margin:6px 0 0 16px;font-size:11px;"><span style="color:#9aa0a6;">Motivo de baja:</span> <span style="font-weight:600;">${escapeHtml(inv.sub.reason)}</span></div>` : ''}` : ''}
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin:8px 0 0 16px;padding-top:8px;border-top:1px solid #e3e6eb;font-size:11px;">
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin:8px 0 0 16px;padding-top:8px;border-top:1px solid #e3e6eb;font-size:11px;">
         ${[
           ['Emisión', ld(inv.invoice_date) || '—', '#202124'],
           ['Vence', ld(inv.invoice_date_due) || '—', '#202124'],
-          ['Saldo', `S/ ${Number(inv.amount_residual || 0).toFixed(2)}`, Number(inv.amount_residual || 0) > 0 ? '#d93025' : '#1e8e3e'],
           ['Estado', st.label, st.text]
         ].map(([k, v, c]) => `<div style="min-width:0;"><div style="color:#9aa0a6;">${k}</div><div style="font-weight:600;color:${c};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(v)}</div></div>`).join('')}
       </div>
@@ -247,7 +246,6 @@ function showCustomerPopup(contacts, number, anchorRect) {
   const bodyOf = (contact) => {
     const addresses = serviceAddresses(contact);
     const totalDebt = contact._debt ? Number(contact._debt.totalDebt || 0) : 0;
-    const debtCount = contact._debt ? (contact._debt.invoiceCount || 0) : 0;
     const invoices = contact._lastInvoices || [];
     return `
       ${addresses.length ? `
@@ -260,7 +258,6 @@ function showCustomerPopup(contacts, number, anchorRect) {
         <div style="${label}margin:0;">Deuda</div>
         <div style="text-align:right;">
           <span style="font-size:16px;font-weight:600;color:${totalDebt > 0 ? '#d93025' : '#1e8e3e'};">S/ ${totalDebt.toFixed(2)}</span>
-          ${totalDebt > 0 ? `<span style="font-size:11px;color:#5f6368;margin-left:4px;">${debtCount} fact.</span>` : ''}
         </div>
       </div>
 
