@@ -454,7 +454,7 @@ async function readSubscriptionRecords(config, model, ids) {
       suspDate: r.x_studio_fecha_suspension || ''
     };
   });
-  console.log('[Odoo Subscriptions]', model, 'campos leídos:', wanted, out);
+  console.log('[Odoo Subscriptions]', model, 'valores leídos:', JSON.stringify(data.result || data.error));
   return out;
 }
 
