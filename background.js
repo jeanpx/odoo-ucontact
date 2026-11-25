@@ -549,7 +549,17 @@ async function lookupViaJsonRpc(config, cleanNumber) {
         continue;
       }
 
-      console.log('[Odoo Lookup] Found', valid.length, 'matches, best:', valid[0].name);
+      // Con varios contactos, primero los que tienen facturas (clientes reales), luego por coincidencia del número
+      const invCount = {};
+      if (valid.length > 1) {
+        const cids = [...new Set(valid.map(c => m2oId(c.commercial_partner_id) || c.id))];
+        const grp = await odooCall(config, 'account.move', 'read_group',
+          [[['commercial_partner_id', 'in', cids], ['move_type', '=', 'out_invoice'], ['state', '=', 'posted']], ['commercial_partner_id'], ['commercial_partner_id']], { lazy: false });
+        (grp.result || []).forEach(g => { invCount[m2oId(g.commercial_partner_id)] = g.__count || g.commercial_partner_id_count || 0; });
+        const rank = new Map(valid.map((c, i) => [c.id, i]));
+        valid.sort((a, b) => ((invCount[m2oId(b.commercial_partner_id) || b.id] ? 1 : 0) - (invCount[m2oId(a.commercial_partner_id) || a.id] ? 1 : 0)) || (rank.get(a.id) - rank.get(b.id)));
+      }
+      console.log('[Odoo Lookup] Found', valid.length, 'matches:', valid.map(c => `${c.name} (#${c.id}, facturas: ${invCount[m2oId(c.commercial_partner_id) || c.id] || 0})`));
       // Hasta 2 contactos con el mismo número, cada uno con su deuda y facturas
       const top = valid.slice(0, 2);
       await Promise.all(top.map(async (c) => {
