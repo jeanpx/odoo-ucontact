@@ -212,7 +212,9 @@ function showCustomerPopup(contacts, number, anchorRect) {
     const phone = contact.mobile || contact.phone || '';
     const meta = [contact.vat ? `${docType} ${contact.vat}` : '', phone].filter(Boolean);
     return `<div style="font-size:15px;font-weight:600;">${escapeHtml(contact.name)}</div>
-      ${meta.length ? `<div style="font-size:12px;color:#5f6368;margin-top:2px;">${meta.map(escapeHtml).join(' · ')}</div>` : ''}`;
+      ${meta.length ? `<div style="font-size:12px;color:#5f6368;margin-top:2px;">${meta.map(escapeHtml).join(' · ')}</div>` : ''}
+      ${Array.isArray(contact.commercial_partner_id) && contact.commercial_partner_id[0] !== contact.id
+        ? `<div style="font-size:12px;color:#5f6368;margin-top:2px;">Cliente: <b>${escapeHtml(contact.commercial_partner_id[1])}</b></div>` : ''}`;
   };
 
   const invoiceCard = (inv) => {

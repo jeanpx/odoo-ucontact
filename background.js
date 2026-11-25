@@ -319,7 +319,7 @@ async function fetchSaleOrders(config, session, partnerId) {
 async function fetchDebt(config, session, partnerId) {
   try {
     const data = await odooSearch(config, session, 'account.move',
-      [['partner_id', '=', partnerId], ['move_type', '=', 'out_invoice'], ['state', '=', 'posted'], ['payment_state', 'not in', ['paid', 'reversed']], ['amount_residual', '>', 0]],
+      [['commercial_partner_id', '=', partnerId], ['move_type', '=', 'out_invoice'], ['state', '=', 'posted'], ['payment_state', 'not in', ['paid', 'reversed']], ['amount_residual', '>', 0]],
       ['name', 'amount_residual', 'amount_total', 'invoice_date', 'payment_state'], 50
     );
     if (data.result?.length > 0) {
@@ -340,10 +340,12 @@ async function fetchDebt(config, session, partnerId) {
 async function fetchLastInvoices(config, session, partnerId) {
   try {
     const moveFields = await modelFields(config, 'account.move');
-    const fields = ['name', 'invoice_date', 'invoice_date_due', 'amount_total', 'amount_residual', 'payment_state', 'invoice_line_ids', 'invoice_origin', 'x_studio_nro_suscripcion']
-      .filter(f => !moveFields || moveFields[f]);
+    // "Estado sus" de la factura (campo Studio): se detecta por su etiqueta
+    const stateField = moveFields && Object.keys(moveFields).find(f => /^estado\s*sus/i.test(moveFields[f].string || ''));
+    const fields = ['name', 'invoice_date', 'invoice_date_due', 'amount_total', 'amount_residual', 'payment_state', 'invoice_line_ids', 'invoice_origin', 'x_studio_nro_suscripcion', stateField]
+      .filter(f => f && (!moveFields || moveFields[f]));
     const data = await odooSearch(config, session, 'account.move',
-      [['partner_id', '=', partnerId], ['move_type', '=', 'out_invoice'], ['state', '=', 'posted']],
+      [['commercial_partner_id', '=', partnerId], ['move_type', '=', 'out_invoice'], ['state', '=', 'posted']],
       fields, 5, 'invoice_date desc, id desc'
     );
     if (data.error) { console.error('[Odoo Last Invoices] Error:', data.error.message); return { error: data.error.message }; }
@@ -373,6 +375,13 @@ async function fetchLastInvoices(config, session, partnerId) {
     invoices.forEach(inv => {
       inv.sub = inv.sub || { subOrder: '', code: '', state: '', reason: '' };
       if (!inv.sub.code) inv.sub.code = inv.x_studio_nro_suscripcion || '';
+      if (stateField) {
+        const v = inv[stateField];
+        const shown = Array.isArray(v) ? v[1]
+          : moveFields[stateField].type === 'selection' ? ((moveFields[stateField].selection || []).find(([k]) => k === v)?.[1] || v) : v;
+        if (shown) inv.sub.state = String(shown);
+        delete inv[stateField];
+      }
       delete inv.invoice_line_ids; delete inv.invoice_origin; delete inv.x_studio_nro_suscripcion;
     });
     return invoices;
@@ -508,7 +517,7 @@ async function lookupViaJsonRpc(config, cleanNumber) {
     if (available.error) return { error: `Error al leer contactos de Odoo: ${available.error}` };
 
     const phoneFields = ['phone', 'mobile'].filter(f => available.includes(f));
-    const wanted = ['id', 'name', 'phone', 'mobile', 'vat', 'l10n_latam_identification_type_id', 'street', 'street2', 'city', 'state_id'];
+    const wanted = ['id', 'name', 'phone', 'mobile', 'vat', 'commercial_partner_id', 'l10n_latam_identification_type_id', 'street', 'street2', 'city', 'state_id'];
     const fields = wanted.filter(f => available.includes(f));
 
     // Búsquedas en orden de preferencia
@@ -546,8 +555,8 @@ async function lookupViaJsonRpc(config, cleanNumber) {
       await Promise.all(top.map(async (c) => {
         const [orders, debt, lastInvoices] = await Promise.all([
           fetchSaleOrders(config, session, c.id).catch(e => { console.error('[Odoo] Orders error:', e); return []; }),
-          fetchDebt(config, session, c.id).catch(e => { console.error('[Odoo] Debt error:', e); return { invoiceCount: 0, totalDebt: 0 }; }),
-          fetchLastInvoices(config, session, c.id).catch(e => { console.error('[Odoo] Last invoices error:', e); return []; })
+          fetchDebt(config, session, m2oId(c.commercial_partner_id) || c.id).catch(e => { console.error('[Odoo] Debt error:', e); return { invoiceCount: 0, totalDebt: 0 }; }),
+          fetchLastInvoices(config, session, m2oId(c.commercial_partner_id) || c.id).catch(e => { console.error('[Odoo] Last invoices error:', e); return []; })
         ]);
         c._saleOrders = orders || [];
         c._debt = debt || { invoiceCount: 0, totalDebt: 0 };
