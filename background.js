@@ -13,6 +13,7 @@ let state = {
   lastOdooAuth: null,
   lastOdooAuthTime: 0,
   partnerFields: null,
+  subscriptionFields: null,
   lastAuthError: null
 };
 
@@ -276,14 +277,14 @@ async function odooCall(config, model, method, args, kwargs, retried) {
 async function testOdooConnection(config) {
   if (!config.odooUrl || !config.odooDb) return { success: false, error: 'Completa URL y base de datos primero' };
   state.lastOdooAuth = null;
-  state.partnerFields = null;
+  state.partnerFields = null; state.subscriptionFields = null;
   const auth = await authenticateOdoo(config, true);
   if (!auth) return { success: false, error: state.lastAuthError || 'No se pudo iniciar sesión' };
   const data = await odooCall(config, 'res.partner', 'search_read', [[]], { fields: ['id'], limit: 1 });
   if (data.error) return { success: false, error: `Sesión OK, pero falló la búsqueda: ${data.error.message}` };
   // La prueba usa la config del formulario (quizá sin guardar): no dejarla en caché
   state.lastOdooAuth = null;
-  state.partnerFields = null;
+  state.partnerFields = null; state.subscriptionFields = null;
   const how = auth.mode === 'apikey' ? 'API Key' : 'sesión web';
   return { success: true, message: `Conexión exitosa (${how}, usuario ${auth.login})` };
 }
@@ -349,14 +350,17 @@ async function fetchLastInvoices(config, session, partnerId) {
       const lineIds = invoices.flatMap(inv => inv.invoice_line_ids || []);
       if (lineIds.length) {
         try {
-          const lines = await odooCall(config, 'account.move.line', 'read', [lineIds], { fields: ['name', 'move_id', 'display_type'] });
-          const byMove = {};
+          let lines = await odooCall(config, 'account.move.line', 'read', [lineIds], { fields: ['name', 'move_id', 'display_type', 'sale_line_ids'] });
+          if (lines.error) lines = await odooCall(config, 'account.move.line', 'read', [lineIds], { fields: ['name', 'move_id', 'display_type'] });
+          const byMove = {}, saleLinesByMove = {};
           (lines.result || []).forEach(l => {
-            if (!l.name || ['line_section', 'line_note'].includes(l.display_type)) return;
             const moveId = Array.isArray(l.move_id) ? l.move_id[0] : l.move_id;
+            if (l.sale_line_ids?.length) (saleLinesByMove[moveId] = saleLinesByMove[moveId] || []).push(...l.sale_line_ids);
+            if (!l.name || ['line_section', 'line_note'].includes(l.display_type)) return;
             (byMove[moveId] = byMove[moveId] || []).push(l.name.trim());
           });
           invoices.forEach(inv => { inv.lines = byMove[inv.id] || []; });
+          await attachSubscriptions(config, invoices, saleLinesByMove);
         } catch (e) { console.error('[Odoo Last Invoices] Lines error:', e); }
       }
       invoices.forEach(inv => delete inv.invoice_line_ids);
@@ -364,6 +368,57 @@ async function fetchLastInvoices(config, session, partnerId) {
     }
   } catch (e) { console.error('[Odoo Last Invoices] Error:', e); }
   return [];
+}
+
+// Campos de sale.order que se muestran como Sub Order / Cod. suscripción / Estado sus.
+// Se detectan por nombre técnico o etiqueta porque pueden ser campos personalizados.
+async function getSubscriptionFields(config) {
+  if (state.subscriptionFields) return state.subscriptionFields;
+  const data = await odooCall(config, 'sale.order', 'fields_get', [], { attributes: ['string', 'type', 'selection'] });
+  if (data.error) return null;
+  const all = data.result || {};
+  const find = (nameRe, labelRe) => Object.keys(all).find(f => nameRe.test(f)) || Object.keys(all).find(f => labelRe.test(all[f].string || ''));
+  const picked = {
+    subOrder: find(/^x_.*sub_?order|^sub_?order/i, /sub\s*order/i),
+    code: find(/^x_.*(cod|code).*sus|subscription_code|cod_suscrip/i, /c[oó]d.*suscrip|suscrip.*c[oó]d|subscription code/i) || 'name',
+    state: find(/^x_.*estado.*sus|^subscription_state$/i, /estado.*sus/i) || 'state'
+  };
+  console.log('[Odoo Subscriptions] Campos usados en sale.order:', picked,
+    'Candidatos:', Object.keys(all).filter(f => /sus|subscri|order/i.test(f + ' ' + all[f].string)).map(f => `${f} (${all[f].string})`));
+  state.subscriptionFields = { picked, meta: all };
+  return state.subscriptionFields;
+}
+
+async function attachSubscriptions(config, invoices, saleLinesByMove) {
+  try {
+    const saleLineIds = [...new Set(Object.values(saleLinesByMove).flat())];
+    if (!saleLineIds.length) return;
+    const sf = await getSubscriptionFields(config);
+    if (!sf) return;
+    const sol = await odooCall(config, 'sale.order.line', 'read', [saleLineIds], { fields: ['order_id'] });
+    const orderBySol = {};
+    (sol.result || []).forEach(l => { orderBySol[l.id] = Array.isArray(l.order_id) ? l.order_id[0] : l.order_id; });
+    const orderIds = [...new Set(Object.values(orderBySol).filter(Boolean))];
+    if (!orderIds.length) return;
+
+    const { picked, meta } = sf;
+    const fields = [...new Set(Object.values(picked).filter(Boolean))];
+    const orders = await odooCall(config, 'sale.order', 'read', [orderIds], { fields });
+    const display = (f, v) => {
+      if (!f || v === false || v == null) return '';
+      if (Array.isArray(v)) return String(v[1] ?? '');
+      if (meta[f]?.type === 'selection') return (meta[f].selection || []).find(([k]) => k === v)?.[1] || String(v);
+      return String(v);
+    };
+    const subs = {};
+    (orders.result || []).forEach(o => {
+      subs[o.id] = { subOrder: display(picked.subOrder, o[picked.subOrder]), code: display(picked.code, o[picked.code]), state: display(picked.state, o[picked.state]) };
+    });
+    invoices.forEach(inv => {
+      const ids = [...new Set((saleLinesByMove[inv.id] || []).map(id => orderBySol[id]).filter(Boolean))];
+      inv.subscriptions = ids.map(id => subs[id]).filter(Boolean);
+    });
+  } catch (e) { console.error('[Odoo Subscriptions] Error:', e); }
 }
 
 function orDomain(fields, op, value) {
@@ -583,7 +638,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     case 'getStatus': getStatus().then(sendResponse); return true;
     case 'getCallLog': getCallLog().then(sendResponse); return true;
     case 'authenticate': (async () => { const c = await getConfig(); sendResponse(await authenticate(c)); })(); return true;
-    case 'updateConfig': (async () => { await saveConfig(msg.config); state.lastOdooAuth = null; state.partnerFields = null; sendResponse({ success: true }); })(); return true;
+    case 'updateConfig': (async () => { await saveConfig(msg.config); state.lastOdooAuth = null; state.partnerFields = null; state.subscriptionFields = null; sendResponse({ success: true }); })(); return true;
     case 'testOdoo': (async () => { sendResponse(await testOdooConnection(msg.config)); })(); return true;
     case 'getConfig': (async () => { sendResponse(await getConfig()); })(); return true;
     case 'lookupInOdoo': (async () => { sendResponse(await lookupInOdoo(msg.number)); })(); return true;
@@ -602,7 +657,7 @@ async function openInOdoo(model, id, viewType) {
 }
 
 chrome.storage.onChanged.addListener((changes) => {
-  if (changes[STORAGE_KEYS.CONFIG]) { state.lastOdooAuth = null; state.partnerFields = null; state.lastLookupResult = null; }
+  if (changes[STORAGE_KEYS.CONFIG]) { state.lastOdooAuth = null; state.partnerFields = null; state.subscriptionFields = null; state.lastLookupResult = null; }
 });
 
 chrome.runtime.onStartup.addListener(() => { state.callState = CALL_STATE.IDLE; updateBadge(); });

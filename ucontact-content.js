@@ -259,9 +259,20 @@ function showCustomerPopup(contacts, number, anchorRect) {
                 <span style="flex:1;min-width:0;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(inv.name)}</span>
                 <span style="font-weight:700;">S/ ${Number(inv.amount_total || 0).toFixed(2)}</span>
               </div>
-              ${lines.length
-                ? lines.map(l => `<div style="color:#5f6368;font-size:12px;margin:4px 0 0 16px;">${escapeHtml(l)}</div>`).join('')
-                : `<div style="color:#5f6368;font-size:12px;margin:4px 0 0 16px;">${ld(inv.invoice_date)}</div>`}
+              ${lines.map(l => `<div style="color:#5f6368;font-size:12px;margin:4px 0 0 16px;">${escapeHtml(l)}</div>`).join('')}
+              ${(inv.subscriptions || []).map(s => `
+                <div style="display:grid;grid-template-columns:1fr 1.4fr 1.2fr;gap:4px;margin:8px 0 0 16px;padding-top:8px;border-top:1px solid #e3e6eb;font-size:11px;">
+                  ${[['Sub order', s.subOrder], ['Cod. suscripción', s.code], ['Estado sus.', s.state]]
+                    .map(([k, v]) => `<div style="min-width:0;"><div style="color:#9aa0a6;">${k}</div><div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(v || '—')}</div></div>`).join('')}
+                </div>`).join('')}
+              <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin:8px 0 0 16px;padding-top:8px;border-top:1px solid #e3e6eb;font-size:11px;">
+                ${[
+                  ['Emisión', ld(inv.invoice_date) || '—', '#202124'],
+                  ['Vence', ld(inv.invoice_date_due) || '—', '#202124'],
+                  ['Saldo', `S/ ${Number(inv.amount_residual || 0).toFixed(2)}`, Number(inv.amount_residual || 0) > 0 ? '#d93025' : '#1e8e3e'],
+                  ['Estado', st.label, st.text]
+                ].map(([k, v, c]) => `<div style="min-width:0;"><div style="color:#9aa0a6;">${k}</div><div style="font-weight:600;color:${c};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(v)}</div></div>`).join('')}
+              </div>
             </div>`;
           }).join('')}
           <div style="display:flex;gap:12px;margin-top:6px;font-size:11px;color:#9aa0a6;">
