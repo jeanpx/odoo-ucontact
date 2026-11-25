@@ -5,6 +5,14 @@ let outputDebounceTimer = null;
 const activePopups = [];
 const pendingLookups = {};
 const lookupErrors = {};
+const TYPED_NUMBER_LENGTH = 9;
+
+// Igual que en background.js: 01151919630893 / 00151... / 0051... / 51... -> 919630893
+function normalizePhone(number) {
+  const digits = String(number || '').replace(/[^0-9]/g, '');
+  const m = digits.match(/^(?:0+1*)?51(\d{8,9})$/);
+  return m ? m[1] : digits;
+}
 
 console.log('[uContact Odoo] Content script loaded, hostname:', window.location.hostname);
 
@@ -59,8 +67,13 @@ function setupOutputListener(output) {
 
 function checkOutput(output) {
   const raw = (output.value || output.textContent || '').trim();
-  const digits = raw.replace(/[^0-9]/g, '');
-  if (digits.length < 7) return;
+  const digits = normalizePhone(raw);
+  // Solo buscar con el número completo (9 dígitos, sin prefijo de país)
+  if (digits.length !== TYPED_NUMBER_LENGTH) {
+    if (outputDebounceTimer) clearTimeout(outputDebounceTimer);
+    lastOutputNumber = '';
+    return;
+  }
   if (digits === lastOutputNumber) return;
   lastOutputNumber = digits;
 
@@ -193,10 +206,14 @@ function findPhoneInputs() {
 }
 
 function onPhoneInput(input) {
-  const value = (input.value || '').trim();
-  const digits = value.replace(/[^0-9]/g, '');
+  const digits = normalizePhone(input.value);
 
-  if (digits.length < 7) return;
+  // Solo buscar con el número completo (9 dígitos, sin prefijo de país)
+  if (digits.length !== TYPED_NUMBER_LENGTH) {
+    clearTimeout(lookupTimer);
+    lastNumberLookedUp = '';
+    return;
+  }
 
   if (digits === lastNumberLookedUp) return;
 
@@ -220,7 +237,7 @@ function lookupAndShowCustomer(number, inputElement) {
 }
 
 function handleIncomingCall(number, rawData) {
-  const digits = String(number).replace(/[^0-9]/g, '');
+  const digits = normalizePhone(number);
   // Evita que el monitor del textarea/dialer dispare un segundo popup para el mismo número
   lastOutputNumber = digits;
   lastNumberLookedUp = digits;
