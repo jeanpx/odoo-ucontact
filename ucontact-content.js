@@ -260,11 +260,12 @@ function showCustomerPopup(contacts, number, anchorRect) {
                 <span style="font-weight:700;">S/ ${Number(inv.amount_total || 0).toFixed(2)}</span>
               </div>
               ${lines.map(l => `<div style="color:#5f6368;font-size:12px;margin:4px 0 0 16px;">${escapeHtml(l)}</div>`).join('')}
-              ${(inv.subscriptions || []).map(s => `
+              ${inv.sub && (inv.sub.subOrder || inv.sub.code || inv.sub.state || inv.sub.reason) ? `
                 <div style="display:grid;grid-template-columns:1fr 1.4fr 1.2fr;gap:4px;margin:8px 0 0 16px;padding-top:8px;border-top:1px solid #e3e6eb;font-size:11px;">
-                  ${[['Sub order', s.subOrder], ['Cod. suscripción', s.code], ['Estado sus.', s.state]]
-                    .map(([k, v]) => `<div style="min-width:0;"><div style="color:#9aa0a6;">${k}</div><div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(v || '—')}</div></div>`).join('')}
-                </div>`).join('')}
+                  ${[['Sub order', inv.sub.subOrder], ['Cod. suscripción', inv.sub.code], ['Estado sus.', inv.sub.state]]
+                    .map(([k, v]) => `<div style="min-width:0;"><div style="color:#9aa0a6;">${k}</div><div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(String(v || '—'))}</div></div>`).join('')}
+                </div>
+                ${inv.sub.reason ? `<div style="margin:6px 0 0 16px;font-size:11px;"><span style="color:#9aa0a6;">Motivo de baja:</span> <span style="font-weight:600;">${escapeHtml(inv.sub.reason)}</span></div>` : ''}` : ''}
               <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin:8px 0 0 16px;padding-top:8px;border-top:1px solid #e3e6eb;font-size:11px;">
                 ${[
                   ['Emisión', ld(inv.invoice_date) || '—', '#202124'],

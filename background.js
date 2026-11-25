@@ -339,11 +339,11 @@ async function fetchDebt(config, session, partnerId) {
 
 async function fetchLastInvoices(config, session, partnerId) {
   try {
-    const data = await odooSearch(config, session, 'account.move',
-      [['partner_id', '=', partnerId], ['move_type', '=', 'out_invoice'], ['state', '=', 'posted']],
-      ['name', 'invoice_date', 'invoice_date_due', 'amount_total', 'amount_residual', 'payment_state', 'currency_id', 'invoice_line_ids'], 5,
-      'invoice_date desc, id desc'
-    );
+    const domain = [['partner_id', '=', partnerId], ['move_type', '=', 'out_invoice'], ['state', '=', 'posted']];
+    const base = ['name', 'invoice_date', 'invoice_date_due', 'amount_total', 'amount_residual', 'payment_state', 'currency_id', 'invoice_line_ids'];
+    // Campos Studio de la factura: nro. de suscripción y motivo de suspensión/baja
+    let data = await odooSearch(config, session, 'account.move', domain, [...base, 'x_studio_nro_suscripcion', 'x_studio_close_reason_id'], 5, 'invoice_date desc, id desc');
+    if (data.error) data = await odooSearch(config, session, 'account.move', domain, base, 5, 'invoice_date desc, id desc');
     if (data.result?.length > 0) {
       const invoices = data.result;
       // Descripción de cada factura = nombre de sus líneas (p. ej. "BAJA INTERNET: 01-11-26 - 24-11-26")
@@ -363,7 +363,18 @@ async function fetchLastInvoices(config, session, partnerId) {
           await attachSubscriptions(config, invoices, saleLinesByMove);
         } catch (e) { console.error('[Odoo Last Invoices] Lines error:', e); }
       }
-      invoices.forEach(inv => delete inv.invoice_line_ids);
+      invoices.forEach(inv => {
+        const so = (inv.subscriptions || [])[0] || {};
+        const reason = inv.x_studio_close_reason_id;
+        inv.sub = {
+          subOrder: so.subOrder || '',
+          code: inv.x_studio_nro_suscripcion || so.code || '',
+          state: so.state || '',
+          reason: Array.isArray(reason) ? reason[1] : ''
+        };
+        delete inv.invoice_line_ids; delete inv.subscriptions;
+        delete inv.x_studio_nro_suscripcion; delete inv.x_studio_close_reason_id;
+      });
       return invoices;
     }
   } catch (e) { console.error('[Odoo Last Invoices] Error:', e); }
@@ -379,7 +390,7 @@ async function getSubscriptionFields(config) {
   const all = data.result || {};
   const find = (nameRe, labelRe) => Object.keys(all).find(f => nameRe.test(f)) || Object.keys(all).find(f => labelRe.test(all[f].string || ''));
   const picked = {
-    subOrder: find(/^x_.*sub_?order|^sub_?order/i, /sub\s*order/i),
+    subOrder: all.x_studio_subs_order ? 'x_studio_subs_order' : find(/^x_.*subs?_?order|^subs?_?order/i, /subs?\s*order/i),
     code: find(/^x_.*(cod|code).*sus|subscription_code|cod_suscrip/i, /c[oó]d.*suscrip|suscrip.*c[oó]d|subscription code/i) || 'name',
     state: find(/^x_.*estado.*sus|^subscription_state$/i, /estado.*sus/i) || 'state'
   };
