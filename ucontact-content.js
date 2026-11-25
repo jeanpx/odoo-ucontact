@@ -233,10 +233,11 @@ function showCustomerPopup(contacts, number, anchorRect) {
             .map(([k, v]) => `<div style="min-width:0;"><div style="color:#9aa0a6;">${k}</div><div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(String(v || '—'))}</div></div>`).join('')}
         </div>
         ${inv.sub.reason && !/activ|progres|curso/i.test(inv.sub.state || '') ? `<div style="margin:6px 0 0 16px;font-size:11px;"><span style="color:#9aa0a6;">Motivo de baja:</span> <span style="font-weight:600;">${escapeHtml(inv.sub.reason)}</span></div>` : ''}` : ''}
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin:8px 0 0 16px;padding-top:8px;border-top:1px solid #e3e6eb;font-size:11px;">
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin:8px 0 0 16px;padding-top:8px;border-top:1px solid #e3e6eb;font-size:11px;">
         ${[
-          ['Emisión', ld(inv.invoice_date) || '—', '#202124'],
-          ['Vence', ld(inv.invoice_date_due) || '—', '#202124'],
+          ['Inicio', ld(inv.sub && inv.sub.startDate) || '—', '#202124'],
+          ['Susp/Baja', ld(inv.sub && inv.sub.suspDate) || '—', '#202124'],
+          ['Meses', subscriptionMonths(inv.sub), '#202124'],
           ['Estado', st.label, st.text]
         ].map(([k, v, c]) => `<div style="min-width:0;"><div style="color:#9aa0a6;">${k}</div><div style="font-weight:600;color:${c};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(v)}</div></div>`).join('')}
       </div>
@@ -520,6 +521,19 @@ function serviceAddresses(contact) {
   const own = [contact.street, contact.street2, contact.city, name(contact.state_id).replace(/\s*\([A-Z]{2}\)$/, '')]
     .filter(p => p && p !== contact.name).join(', ');
   return own ? [own] : [];
+}
+
+// Meses completos desde el inicio hasta la suspensión/baja (o hasta hoy si sigue activa)
+function subscriptionMonths(sub) {
+  const parse = v => { const m = String(v || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? [+m[1], +m[2], +m[3]] : null; };
+  const start = parse(sub && sub.startDate);
+  if (!start) return '—';
+  const t = new Date();
+  const end = parse(sub.suspDate) || [t.getFullYear(), t.getMonth() + 1, t.getDate()];
+  let months = (end[0] - start[0]) * 12 + (end[1] - start[1]);
+  if (end[2] < start[2]) months--;
+  months = Math.max(0, months);
+  return `${months} mes${months === 1 ? '' : 'es'}`;
 }
 
 function invoiceStatus(paymentState) {

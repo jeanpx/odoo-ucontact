@@ -435,7 +435,7 @@ async function modelFields(config, model) {
 async function readSubscriptionRecords(config, model, ids) {
   const meta = await modelFields(config, model);
   if (!meta || !ids.length) return {};
-  const wanted = ['code', 'name', 'stage_id', 'close_reason_id', 'x_studio_subs_order', 'subscription_state'].filter(f => meta[f]);
+  const wanted = ['code', 'name', 'stage_id', 'close_reason_id', 'x_studio_subs_order', 'subscription_state', 'start_date', 'x_studio_fecha_suspension'].filter(f => meta[f]);
   const data = await odooCall(config, model, 'read', [ids], { fields: wanted });
   const show = (f, v) => {
     if (v === false || v == null) return '';
@@ -449,7 +449,9 @@ async function readSubscriptionRecords(config, model, ids) {
       subOrder: show('x_studio_subs_order', r.x_studio_subs_order),
       code: show('code', r.code),
       state: show('stage_id', r.stage_id) || show('subscription_state', r.subscription_state),
-      reason: show('close_reason_id', r.close_reason_id)
+      reason: show('close_reason_id', r.close_reason_id),
+      startDate: r.start_date || '',
+      suspDate: r.x_studio_fecha_suspension || ''
     };
   });
   console.log('[Odoo Subscriptions]', model, 'campos leídos:', wanted, out);
