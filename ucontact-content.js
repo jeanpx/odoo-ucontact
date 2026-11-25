@@ -301,7 +301,7 @@ function lookupNumber(number, onResult) {
 }
 
 function showCustomerPopup(contacts, number, anchorRect) {
-  function ld(v, fmt) { if (!v) return ''; const m = v.match(/^(\d{4})-(\d{2})-(\d{2})/); if (!m) return ''; return new Date(+m[1], +m[2]-1, +m[3]).toLocaleDateString('es-PE', fmt || { day: '2-digit', month: '2-digit', year: 'numeric' }); }
+  function ld(v) { if (!v) return ''; const m = v.match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]}/${m[2]}/${m[1]}` : ''; }
   if (!contacts || contacts.length === 0) {
     showNotFoundPopup(number, anchorRect);
     return;
@@ -309,189 +309,65 @@ function showCustomerPopup(contacts, number, anchorRect) {
   removeLoadingPopups();
 
   const contact = contacts[0];
+  const addresses = serviceAddresses(contact);
+  const totalDebt = contact._debt ? Number(contact._debt.totalDebt || 0) : 0;
+  const debtCount = contact._debt ? (contact._debt.invoiceCount || 0) : 0;
+  const docType = Array.isArray(contact.l10n_latam_identification_type_id) ? contact.l10n_latam_identification_type_id[1] : 'DNI';
+  const phone = contact.mobile || contact.phone || '';
+  const meta = [contact.vat ? `${docType} ${contact.vat}` : '', phone].filter(Boolean);
+  const label = 'font-size:11px;color:#9aa0a6;text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px;';
+
   const popup = document.createElement('div');
   popup.id = 'ucontact-odoo-popup';
   popup.style.cssText = `
-    position: fixed; z-index: 2147483647;
-    background: white; border-radius: 12px;
-    box-shadow: 0 8px 40px rgba(0,0,0,0.18), 0 2px 8px rgba(0,0,0,0.08);
-    padding: 0; min-width: 320px; max-width: 420px; max-height: calc(100vh - 40px);
+    position: fixed; z-index: 2147483647; width: 340px; max-height: calc(100vh - 40px);
+    background: #fff; border-radius: 10px; border-top: 3px solid ${totalDebt > 0 ? '#d93025' : '#1e8e3e'};
+    box-shadow: 0 6px 24px rgba(0,0,0,.16);
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    font-size: 14px; color: #1a1a1a; line-height: 1.4;
-    overflow-y: auto; overflow-x: hidden; animation: ucontactPopupIn 0.25s ease-out;
-    cursor: default;
+    font-size: 13px; color: #202124; line-height: 1.4;
+    overflow-y: auto; overflow-x: hidden; animation: ucontactPopupIn .2s ease-out;
   `;
 
-  const categoryTags = contact.category_id
-    ? (Array.isArray(contact.category_id)
-      ? contact.category_id.map(c => typeof c === 'object' ? c[1] : c).filter(Boolean).join(', ')
-      : '')
-    : '';
-
-  const hasDuplicates = contacts.length > 1;
-  const address = formatAddress(contact);
-  const totalDebt = contact._debt ? Number(contact._debt.totalDebt || 0) : 0;
-  const debtCount = contact._debt ? (contact._debt.invoiceCount || 0) : 0;
-
   popup.innerHTML = `
-    <div id="ucontact-popup-header" style="cursor: move; background: linear-gradient(135deg, #009ddf, #0064b4); padding: 16px 20px; display: flex; align-items: center; gap: 12px; user-select: none;">
-      <div style="width: 40px; height: 40px; border-radius: 50%; background: rgba(255,255,255,0.2); display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
-        <svg viewBox="0 0 24 24" width="22" height="22" fill="white">
-          <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
-        </svg>
+    <div id="ucontact-popup-header" style="cursor:move;user-select:none;padding:14px 16px 10px;display:flex;gap:8px;align-items:flex-start;">
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:15px;font-weight:600;">${escapeHtml(contact.name)}</div>
+        ${meta.length ? `<div style="font-size:12px;color:#5f6368;margin-top:2px;">${meta.map(escapeHtml).join(' · ')}</div>` : ''}
       </div>
-      <div style="flex:1; min-width: 0;">
-        <div style="font-size: 17px; font-weight: 700; color: white;">${escapeHtml(contact.name)}</div>
-        ${categoryTags ? `<div style="font-size: 11px; color: rgba(255,255,255,0.8); margin-top: 2px;">${escapeHtml(categoryTags)}</div>` : ''}
-      </div>
-      <button id="ucontact-popup-close" style="background: rgba(255,255,255,0.15); border: none; border-radius: 50%; width: 28px; height: 28px; color: white; font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">✕</button>
+      <button id="ucontact-popup-close" title="Cerrar" style="background:none;border:none;color:#9aa0a6;font-size:16px;cursor:pointer;padding:0 2px;line-height:1;">✕</button>
     </div>
-    <div style="padding: 16px 20px;">
-      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
-        ${contact.phone ? `<div><div style="font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px;">Teléfono</div><div style="font-weight: 600; font-size: 15px; color: #009ddf;">${escapeHtml(contact.phone)}</div></div>` : ''}
-        ${contact.mobile ? `<div><div style="font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px;">Móvil</div><div style="font-weight: 600; font-size: 15px; color: #009ddf;">${escapeHtml(contact.mobile)}</div></div>` : ''}
-        ${contact.email ? `<div style="grid-column: 1 / -1;"><div style="font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px;">Email</div><div style="font-weight: 500;">${escapeHtml(contact.email)}</div></div>` : ''}
-        ${contact.company_name ? `<div><div style="font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px;">Empresa</div><div style="font-weight: 500;">${escapeHtml(contact.company_name)}</div></div>` : ''}
-        ${contact.function ? `<div><div style="font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px;">Cargo</div><div style="font-weight: 500;">${escapeHtml(contact.function)}</div></div>` : ''}
-        ${contact.website ? `<div><div style="font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px;">Web</div><div style="font-weight: 500;">${escapeHtml(contact.website)}</div></div>` : ''}
-        ${address ? `<div style="grid-column: 1 / -1;"><div style="font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px;">Dirección</div><div style="font-weight: 500;">🏠 ${escapeHtml(address)}</div></div>` : ''}
+
+    <div style="padding:0 16px 14px;">
+      ${addresses.length ? `
+        <div style="padding:10px 0;border-top:1px solid #f1f3f4;">
+          <div style="${label}">Dirección</div>
+          ${addresses.map(a => `<div>${escapeHtml(a)}</div>`).join('')}
+        </div>` : ''}
+
+      <div style="padding:10px 0;border-top:1px solid #f1f3f4;display:flex;justify-content:space-between;align-items:baseline;">
+        <div style="${label}margin:0;">Deuda</div>
+        <div style="text-align:right;">
+          <span style="font-size:16px;font-weight:600;color:${totalDebt > 0 ? '#d93025' : '#1e8e3e'};">S/ ${totalDebt.toFixed(2)}</span>
+          ${totalDebt > 0 ? `<span style="font-size:11px;color:#5f6368;margin-left:4px;">${debtCount} fact.</span>` : ''}
+        </div>
       </div>
-      ${contact._debt ? (totalDebt > 0 ? `
-        <div style="margin-top: 14px; padding: 10px 14px; border-radius: 8px; background: #fdecea; display: flex; justify-content: space-between; align-items: center;">
-          <div>
-            <div style="font-size: 11px; color: #a94442; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600;">Deuda pendiente</div>
-            <div style="font-size: 11px; color: #a94442;">${debtCount} factura${debtCount === 1 ? '' : 's'} impaga${debtCount === 1 ? '' : 's'}</div>
-          </div>
-          <div style="font-size: 20px; font-weight: 700; color: #d9534f;">S/ ${totalDebt.toFixed(2)}</div>
-        </div>` : `
-        <div style="margin-top: 14px; padding: 8px 14px; border-radius: 8px; background: #eaf6ea; color: #3c763d; font-weight: 600; font-size: 13px;">✓ Sin deuda pendiente</div>`) : ''}
-      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px; min-width: 0;">
-        ${contact._saleOrders && contact._saleOrders.length > 0 ? (() => {
-          const debtMap = {};
-          if (contact._debt && contact._debt.invoices) {
-            for (const inv of contact._debt.invoices) {
-              const subId = inv.x_studio_subscription_id && Array.isArray(inv.x_studio_subscription_id) ? inv.x_studio_subscription_id[0] : null;
-              if (subId) debtMap[subId] = (debtMap[subId] || 0) + Number(inv.amount_residual || inv.amount_total || 0);
-            }
-          }
-          function renderSubItem(item, type) {
-            if (type === 'task') {
-              const stageName = item.stage_id && Array.isArray(item.stage_id) ? item.stage_id[1] : '';
-              const projectName = item.project_id && Array.isArray(item.project_id) ? item.project_id[1] : '';
-              const deadline = item.date_deadline ? ld(item.date_deadline) : '';
-              const sc = stageName ? stageColor(stageName) : { bg: '#5cb85c20', text: '#5cb85c' };
-              return `<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:12px;border-bottom:1px solid #f5f5f5;">
-                <div style="flex:1;min-width:0;">
-                  <div style="font-weight:600;word-wrap:break-word;overflow-wrap:break-word;">${escapeHtml(item.name)}</div>
-                  <div style="font-size:10px;color:#999;">
-                    ${projectName ? `<div>${escapeHtml(projectName)}</div>` : ''}
-                    ${deadline ? `<div style="margin-top:1px;">📅 ${deadline}</div>` : ''}
-                  </div>
-                </div>
-                ${stageName ? `<span style="flex-shrink:0;margin-left:8px;padding:1px 5px;border-radius:3px;background:${sc.bg};color:${sc.text};font-size:9px;font-weight:600;">${escapeHtml(stageName)}</span>` : ''}
-              </div>`;
-            }
-            if (type === 'ticket') {
-              const stageName = item.stage_id && Array.isArray(item.stage_id) ? item.stage_id[1] : '';
-              const teamName = item.team_id && Array.isArray(item.team_id) ? item.team_id[1] : '';
-              const created = item.create_date ? ld(item.create_date) : '';
-              const sc = stageName ? stageColor(stageName) : { bg: '#88888820', text: '#888' };
-              return `<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:12px;border-bottom:1px solid #f5f5f5;">
-                <div style="flex:1;min-width:0;">
-                  <div style="font-weight:600;word-wrap:break-word;overflow-wrap:break-word;">${escapeHtml(item.name)}</div>
-                  <div style="font-size:10px;color:#999;">
-                    ${teamName ? `<div>${escapeHtml(teamName)}</div>` : ''}
-                    ${created ? `<div style="margin-top:1px;">📅 ${created}</div>` : ''}
-                  </div>
-                </div>
-                ${stageName ? `<span style="flex-shrink:0;margin-left:8px;padding:1px 5px;border-radius:3px;background:${sc.bg};color:${sc.text};font-size:9px;font-weight:600;">${escapeHtml(stageName)}</span>` : ''}
-              </div>`;
-            }
-            if (type === 'noc') {
-              const ref = item.x_studio_helpdesk_id && Array.isArray(item.x_studio_helpdesk_id) ? item.x_studio_helpdesk_id[1] : '';
-              const opName = item.x_name || '';
-              const stageName = item.x_studio_stage_id ? (Array.isArray(item.x_studio_stage_id) ? item.x_studio_stage_id[1] : item.x_studio_stage_id) : '';
-              const opDate = item.x_studio_fecha_operacion ? ld(item.x_studio_fecha_operacion) : '';
-              const sc = stageName ? stageColor(stageName) : { bg: '#88888820', text: '#888' };
-              return `<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:12px;border-bottom:1px solid #f5f5f5;">
-                <div style="flex:1;min-width:0;">
-                  <div style="font-weight:600;word-wrap:break-word;overflow-wrap:break-word;">${escapeHtml(opName || ref || item.id)}</div>
-                  <div style="font-size:10px;color:#999;">
-                    ${ref ? `<div>${escapeHtml(ref)}</div>` : ''}
-                    ${opDate ? `<div style="margin-top:1px;">📅 ${opDate}</div>` : ''}
-                  </div>
-                </div>
-                ${stageName ? `<span style="flex-shrink:0;margin-left:8px;padding:1px 5px;border-radius:3px;background:${sc.bg};color:${sc.text};font-size:9px;font-weight:600;">${escapeHtml(stageName)}</span>` : ''}
-              </div>`;
-            }
-            return '';
-          }
-          const dataRows = contact._saleOrders.map(o => {
-            const debt = debtMap[o.id] || 0;
-            const stageName = o.stage_id && Array.isArray(o.stage_id) ? o.stage_id[1] : '';
-            const date = o.date_order ? ld(o.date_order) : '';
-            const sc = stageName ? stageColor(stageName) : { bg: '#009ddf20', text: '#009ddf' };
-            const shipId = o.partner_shipping_id && Array.isArray(o.partner_shipping_id) ? o.partner_shipping_id[0] : null;
-            const tasks = shipId ? (contact._tasks || []).filter(t => t.x_studio_partner_shipping_id && Array.isArray(t.x_studio_partner_shipping_id) && t.x_studio_partner_shipping_id[0] === shipId).slice(0, 5) : [];
-            const tickets = shipId ? (contact._tickets || []).filter(t => t.x_studio_partner_shipping_id && Array.isArray(t.x_studio_partner_shipping_id) && t.x_studio_partner_shipping_id[0] === shipId).slice(0, 5) : [];
-            const nocs = shipId ? (contact._customTickets || []).filter(n => n.x_studio_partner_shipping_id && Array.isArray(n.x_studio_partner_shipping_id) && n.x_studio_partner_shipping_id[0] === shipId).slice(0, 5) : [];
-            const hasRelated = tasks.length > 0 || tickets.length > 0 || nocs.length > 0;
-            return `
-              <div data-sub-id="${o.id}" data-sub-name="${escapeHtml(o.name.split(/\s*-\s*/)[0] || o.name)}" style="cursor:pointer;" onclick="(function(el){var d=el.nextElementSibling;if(d&&d.classList.contains('ucontact-sub-details')){var show=d.style.display!=='none';d.style.display=show?'none':'';el.querySelector('.ucontact-expand-icon').textContent=show?'▶':'▼';el.style.background=show?'':'#e8f4fd';el.style.borderRadius=show?'':'6px';}})(this)">
-                <div style="display: flex; gap: 12px; align-items: center; padding: 6px 0; border-bottom: 1px solid #f0f0f0; font-size: 13px;">
-                  <div style="flex: 1; overflow: hidden;">
-                    <div><span class="ucontact-expand-icon" style="font-size:10px;color:#aaa;margin-right:4px;">▶</span><span style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(o.name.split(/\s*-\s*/)[0] || o.name)}</span></div>
-                    <div style="font-size: 11px; color: #999;">${date} ${stageName ? `· <span style="color:${sc.text};">${escapeHtml(stageName)}</span>` : ''}</div>
-                    ${o.partner_shipping_id ? `<div style="font-size: 11px; color: #999; margin-top: 2px;">🏠 ${escapeHtml((Array.isArray(o.partner_shipping_id) ? o.partner_shipping_id[1] : '').replace(/^[^,]+,\s*/, ''))}</div>` : ''}
-                  </div>
-                  <div style="width: 100px; text-align: right; font-weight: 600;">S/ ${Number(o.amount_total || 0).toFixed(2)}</div>
-                  <div style="width: 90px; text-align: right; font-weight: 600; color: ${debt > 0 ? '#d9534f' : '#5cb85c'};">${debt > 0 ? `S/ ${debt.toFixed(2)}` : 'S/ 0.00'}</div>
-                </div>
-              </div>
-              <div class="ucontact-sub-details" style="display:none;padding:4px 0 4px 12px;background:#fafafa;border-bottom:1px solid #f0f0f0;font-size:12px;">
-                ${tasks.length > 0 ? `<div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:0.5px;margin:4px 0 2px;">Tareas</div>${tasks.map(t => renderSubItem(t, 'task')).join('')}` : ''}
-                ${tickets.length > 0 ? `<div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:0.5px;margin:4px 0 2px;">Tickets</div>${tickets.map(t => renderSubItem(t, 'ticket')).join('')}` : ''}
-                ${nocs.length > 0 ? `<div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:0.5px;margin:4px 0 2px;">NOC</div>${nocs.map(n => renderSubItem(n, 'noc')).join('')}` : ''}
-                ${!hasRelated ? `<div style="color:#aaa;padding:4px 0;">Sin registros relacionados</div>` : ''}
-              </div>`;
-          }).join('');
-          return `<div style="grid-column: 1 / -1; padding-top: 14px; border-top: 1px solid #f0f0f0; min-width: 0; overflow-wrap: break-word;">
-            <div style="font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;">Suscripciones</div>
-            <div style="display: flex; gap: 12px; align-items: center; padding: 4px 0; border-bottom: 1px solid #eee; font-size: 10px; color: #aaa; text-transform: uppercase; letter-spacing: 0.5px;">
-              <div style="flex: 1;">Pedido</div>
-              <div style="width: 100px; text-align: right;">Total</div>
-              <div style="width: 90px; text-align: right;">Deuda</div>
-            </div>
-            ${dataRows}
-          </div>`;
-        })() : ''}
-      </div>
-      ${contact._lastInvoices && contact._lastInvoices.length > 0 ? `
-        <div style="margin-top: 14px; padding-top: 14px; border-top: 1px solid #f0f0f0;">
-          <div style="font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;">Últimas facturas</div>
+
+      ${contact._lastInvoices && contact._lastInvoices.length ? `
+        <div style="padding-top:10px;border-top:1px solid #f1f3f4;">
+          <div style="${label}">Últimas facturas</div>
           ${contact._lastInvoices.map(inv => {
             const st = invoiceStatus(inv.payment_state);
-            const residual = Number(inv.amount_residual || 0);
-            return `<div data-invoice-id="${inv.id}" title="Clic para abrir en Odoo" style="display: flex; gap: 10px; align-items: center; padding: 6px 0; border-bottom: 1px solid #f5f5f5; font-size: 12px; cursor: pointer;">
-              <div style="flex: 1; min-width: 0;">
-                <div style="font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(inv.name)}</div>
-                <div style="font-size: 11px; color: #999;">${ld(inv.invoice_date)}${inv.invoice_date_due && residual > 0 ? ` · vence ${ld(inv.invoice_date_due)}` : ''}</div>
-              </div>
-              <div style="text-align: right;">
-                <div style="font-weight: 600;">S/ ${Number(inv.amount_total || 0).toFixed(2)}</div>
-                ${residual > 0 && residual < Number(inv.amount_total || 0) ? `<div style="font-size: 10px; color: #d9534f;">saldo S/ ${residual.toFixed(2)}</div>` : ''}
-              </div>
-              <span style="flex-shrink: 0; width: 64px; text-align: center; padding: 2px 4px; border-radius: 4px; background: ${st.bg}; color: ${st.text}; font-size: 10px; font-weight: 600;">${st.label}</span>
+            return `<div data-invoice-id="${inv.id}" title="Abrir en Odoo" style="display:flex;align-items:center;gap:8px;padding:4px 0;cursor:pointer;">
+              <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(inv.name)}</span>
+              <span style="color:#9aa0a6;font-size:12px;">${ld(inv.invoice_date)}</span>
+              <span style="width:68px;text-align:right;">S/ ${Number(inv.amount_total || 0).toFixed(2)}</span>
+              <span title="${st.label}" style="width:8px;height:8px;border-radius:50%;background:${st.text};flex-shrink:0;"></span>
             </div>`;
           }).join('')}
-        </div>
-      ` : ''}
-      ${hasDuplicates ? `
-        <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #f0f0f0;">
-          <div style="font-size: 11px; color: #888; margin-bottom: 6px;">Otros contactos con este número:</div>
-          ${contacts.slice(1, 4).map(c => `<div style="font-size: 13px; padding: 4px 0;">• ${escapeHtml(c.name)}${c.company_name ? ` — ${escapeHtml(c.company_name)}` : ''}</div>`).join('')}
-        </div>
-      ` : ''}
+          <div style="display:flex;gap:12px;margin-top:6px;font-size:11px;color:#9aa0a6;">
+            ${['paid', 'partial', 'not_paid'].map(k => { const s = invoiceStatus(k); return `<span><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${s.text};margin-right:4px;vertical-align:middle;"></span>${s.label}</span>`; }).join('')}
+          </div>
+        </div>` : ''}
     </div>
   `;
 
@@ -501,6 +377,8 @@ function showCustomerPopup(contacts, number, anchorRect) {
   });
 
   popup.querySelectorAll('[data-invoice-id]').forEach(row => {
+    row.addEventListener('mouseenter', () => { row.style.background = '#f8f9fa'; });
+    row.addEventListener('mouseleave', () => { row.style.background = ''; });
     row.addEventListener('click', () => {
       chrome.runtime.sendMessage({ action: 'openInOdoo', model: 'account.move', id: parseInt(row.dataset.invoiceId), viewType: 'form' });
     });
@@ -510,61 +388,24 @@ function showCustomerPopup(contacts, number, anchorRect) {
 
   // Make popup draggable via header
   const header = popup.querySelector('#ucontact-popup-header');
-  if (header) {
-    let isDragging = false, dragStartX, dragStartY, origX, origY;
-    header.addEventListener('mousedown', (e) => {
-      if (e.target.closest('#ucontact-popup-close')) return;
-      isDragging = true;
-      const rect = popup.getBoundingClientRect();
-      origX = rect.left;
-      origY = rect.top;
-      dragStartX = e.clientX;
-      dragStartY = e.clientY;
-      popup.style.transition = 'none';
-      popup.style.animation = 'none';
-      e.preventDefault();
-    });
-    document.addEventListener('mousemove', (e) => {
-      if (!isDragging) return;
-      popup.style.left = (origX + (e.clientX - dragStartX)) + 'px';
-      popup.style.top = (origY + (e.clientY - dragStartY)) + 'px';
-    });
-    document.addEventListener('mouseup', () => {
-      if (isDragging) {
-        isDragging = false;
-        popup.style.transition = '';
-      }
-    });
-  }
+  let isDragging = false, dragStartX, dragStartY, origX, origY;
+  header.addEventListener('mousedown', (e) => {
+    if (e.target.closest('#ucontact-popup-close')) return;
+    isDragging = true;
+    const rect = popup.getBoundingClientRect();
+    origX = rect.left; origY = rect.top;
+    dragStartX = e.clientX; dragStartY = e.clientY;
+    popup.style.animation = 'none';
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+    popup.style.left = (origX + (e.clientX - dragStartX)) + 'px';
+    popup.style.top = (origY + (e.clientY - dragStartY)) + 'px';
+  });
+  document.addEventListener('mouseup', () => { isDragging = false; });
 
   positionPopup(popup, anchorRect);
-
-  // Right-click context menu for subscriptions
-  popup.addEventListener('contextmenu', (e) => {
-    const row = e.target.closest('[data-sub-id]');
-    if (!row) return;
-    e.preventDefault();
-    const existing = popup.querySelector('.ucontact-ctx-menu');
-    if (existing) existing.remove();
-    const menu = document.createElement('div');
-    menu.className = 'ucontact-ctx-menu';
-    menu.style.cssText = `position:fixed;z-index:2147483647;background:white;border-radius:8px;box-shadow:0 4px 20px rgba(0,0,0,0.2);padding:4px 0;font-size:13px;min-width:180px;left:${e.clientX}px;top:${e.clientY}px;`;
-    menu.innerHTML = `
-      <div data-action="open-sub" data-id="${row.dataset.subId}" style="padding:8px 16px;cursor:pointer;">Abrir en Odoo</div>
-      <div data-action="copy-sub" data-name="${escapeHtml(row.dataset.subName)}" style="padding:8px 16px;cursor:pointer;">Copiar nombre</div>`;
-    document.body.appendChild(menu);
-    const close = () => { menu.remove(); document.removeEventListener('click', close); };
-    setTimeout(() => document.addEventListener('click', close), 0);
-    menu.querySelector('[data-action="open-sub"]').addEventListener('click', () => {
-      chrome.runtime.sendMessage({ action: 'openInOdoo', model: 'sale.order', id: parseInt(menu.querySelector('[data-action="open-sub"]').dataset.id), viewType: 'form' });
-      close();
-    });
-    menu.querySelector('[data-action="copy-sub"]').addEventListener('click', () => {
-      navigator.clipboard.writeText(menu.querySelector('[data-action="copy-sub"]').dataset.name);
-      close();
-    });
-  });
-
   activePopups.push(popup);
 }
 
@@ -727,30 +568,30 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
-function formatAddress(c) {
-  if (!c) return '';
+// Direcciones del servicio (entrega de las suscripciones); si no hay, la de la ficha
+function serviceAddresses(contact) {
+  const out = [];
+  for (const o of contact._saleOrders || []) {
+    const ps = o.partner_shipping_id;
+    if (!Array.isArray(ps) || ps[0] === contact.id) continue;
+    const addr = String(ps[1] || '').replace(/^[^,]+,\s*/, '').trim();
+    if (addr && !out.includes(addr)) out.push(addr);
+  }
+  if (out.length) return out.slice(0, 3);
   const name = (v) => Array.isArray(v) ? v[1] : (v || '');
-  return [c.street, c.street2, c.city, name(c.state_id)].filter(Boolean).join(', ');
+  const own = [contact.street, contact.street2, contact.city, name(contact.state_id).replace(/\s*\([A-Z]{2}\)$/, '')]
+    .filter(p => p && p !== contact.name).join(', ');
+  return own ? [own] : [];
 }
 
 function invoiceStatus(paymentState) {
   switch (paymentState) {
-    case 'paid': return { label: 'Pagada', bg: '#eaf6ea', text: '#3c763d' };
+    case 'paid': return { label: 'Pagada', bg: '#e6f4ea', text: '#1e8e3e' };
     case 'in_payment': return { label: 'En pago', bg: '#e8f4fd', text: '#0064b4' };
-    case 'partial': return { label: 'Parcial', bg: '#fff4e0', text: '#b26a00' };
+    case 'partial': return { label: 'Parcial', bg: '#fef7e0', text: '#f29900' };
     case 'reversed': return { label: 'Revertida', bg: '#f0f0f0', text: '#777' };
-    default: return { label: 'Pendiente', bg: '#fdecea', text: '#c0392b' };
+    default: return { label: 'Pendiente', bg: '#fce8e6', text: '#d93025' };
   }
-}
-
-function stageColor(name) {
-  if (/baja/i.test(name)) return { bg: '#fce4e4', text: '#c0392b' };
-  let hash = 0;
-  for (let i = 0; i < name.length; i++) {
-    hash = name.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  const h = Math.abs(hash) % 360;
-  return { bg: `hsl(${h}, 45%, 92%)`, text: `hsl(${h}, 55%, 30%)` };
 }
 
 function injectCustomerPopupStyles() {

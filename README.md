@@ -6,12 +6,12 @@ Extensión de Chrome que integra la telefonia uContact con Odoo. Cuando un agent
 
 - **Detección automática** de números telefónicos en la interfaz de uContact
 - **Búsqueda en Odoo** vía JSON-RPC con patrón flexible (coincide números sin importar formato)
-- **Popup interactivo** con:
-  - Datos del contacto (nombre, teléfono, email, empresa, categorías)
-  - **Suscripciones**: pedidos con total y deuda por facturas impagas
-  - Expansión por clic: cada suscripción muestra sus tareas, tickets y NOC relacionados
-  - Clic derecho: menú contextual para abrir en Odoo o copiar nombre
-  - Arrastrable y redimensionable
+- **Popup al recibir la llamada** con:
+  - Nombre, DNI y teléfono del cliente
+  - Dirección del servicio (dirección de entrega de sus suscripciones)
+  - Deuda pendiente
+  - Últimas 5 facturas con su estado (clic para abrirla en Odoo)
+  - Arrastrable desde la cabecera
 
 ## Instalación
 
@@ -33,23 +33,8 @@ La extensión usará la sesión activa de Odoo en el navegador para autenticarse
 | Modelo | Propósito |
 |--------|-----------|
 | `res.partner` | Contacto principal |
-| `sale.order` | Suscripciones/pedidos del cliente |
-| `account.move` | Facturas para cálculo de deuda |
-| `project.task` | Tareas relacionadas |
-| `helpdesk.ticket` | Tickets de soporte |
-| `x_detalle_de_ticket` | Tickets NOC personalizados |
-
-## Campos personalizados (Studio)
-
-| Campo | Modelo | Relación |
-|-------|--------|----------|
-| `x_studio_subscription_id` | `account.move` | `sale.order` |
-| `x_studio_partner_shipping_id` | `project.task`, `helpdesk.ticket`, `x_detalle_de_ticket` | `res.partner` |
-| `x_studio_partner_id` | `x_detalle_de_ticket` | `res.partner` |
-| `x_studio_helpdesk_id` | `x_detalle_de_ticket` | `helpdesk.ticket` |
-| `x_name` | `x_detalle_de_ticket` | - |
-| `x_studio_stage_id` | `x_detalle_de_ticket` | Etapa |
-| `x_studio_fecha_operacion` | `x_detalle_de_ticket` | Fecha |
+| `sale.order` | Suscripciones (dirección del servicio) |
+| `account.move` | Deuda y últimas facturas |
 
 ## Stack técnico
 

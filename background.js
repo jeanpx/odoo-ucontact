@@ -307,44 +307,11 @@ async function getPartnerFields(config) {
 async function fetchSaleOrders(config, session, partnerId) {
   try {
     const data = await odooSearch(config, session, 'sale.order',
-      [['partner_id', '=', partnerId]],
-      ['name', 'date_order', 'amount_total', 'state', 'stage_id', 'currency_id', 'partner_shipping_id'], 10
+      [['partner_id', '=', partnerId], ['state', '!=', 'cancel']],
+      ['partner_shipping_id'], 10
     );
     if (data.result?.length > 0) return data.result;
   } catch (e) { console.error('[Odoo Orders] Error:', e); }
-  return [];
-}
-
-async function fetchTasks(config, session, partnerId) {
-  try {
-    const data = await odooSearch(config, session, 'project.task',
-      [['partner_id', '=', partnerId]],
-      ['name', 'project_id', 'stage_id', 'user_ids', 'date_deadline', 'x_studio_partner_shipping_id'], 50
-    );
-    if (data.result?.length > 0) return data.result;
-  } catch (e) { console.error('[Odoo Tasks] Error:', e); }
-  return [];
-}
-
-async function fetchTickets(config, session, partnerId) {
-  try {
-    const data = await odooSearch(config, session, 'helpdesk.ticket',
-      [['partner_id', '=', partnerId]],
-      ['name', 'stage_id', 'team_id', 'priority', 'create_date', 'x_studio_partner_shipping_id'], 50
-    );
-    if (data.result?.length > 0) return data.result;
-  } catch (e) { console.error('[Odoo Tickets] Error:', e); }
-  return [];
-}
-
-async function fetchCustomTickets(config, session, partnerId) {
-  try {
-    const data = await odooSearch(config, session, 'x_detalle_de_ticket',
-      [['x_studio_partner_id', '=', partnerId]],
-      ['x_studio_helpdesk_id', 'x_name', 'x_studio_stage_id', 'x_studio_fecha_operacion', 'x_studio_partner_shipping_id'], 50
-    );
-    if (data.result?.length > 0) return data.result;
-  } catch (e) { console.error('[Odoo Custom Tickets] Error:', e); }
   return [];
 }
 
@@ -352,7 +319,7 @@ async function fetchDebt(config, session, partnerId) {
   try {
     const data = await odooSearch(config, session, 'account.move',
       [['partner_id', '=', partnerId], ['move_type', '=', 'out_invoice'], ['state', '=', 'posted'], ['payment_state', 'not in', ['paid', 'reversed']], ['amount_residual', '>', 0]],
-      ['name', 'amount_residual', 'amount_total', 'invoice_date', 'payment_state', 'x_studio_subscription_id'], 50
+      ['name', 'amount_residual', 'amount_total', 'invoice_date', 'payment_state'], 50
     );
     if (data.result?.length > 0) {
       const total = data.result.reduce((sum, inv) => {
@@ -412,7 +379,7 @@ async function lookupViaJsonRpc(config, cleanNumber) {
     if (available.error) return { error: `Error al leer contactos de Odoo: ${available.error}` };
 
     const phoneFields = ['phone', 'mobile'].filter(f => available.includes(f));
-    const wanted = ['id', 'name', 'phone', 'mobile', 'email', 'company_name', 'street', 'street2', 'city', 'state_id', 'country_id', 'category_id', 'function', 'website'];
+    const wanted = ['id', 'name', 'phone', 'mobile', 'vat', 'l10n_latam_identification_type_id', 'street', 'street2', 'city', 'state_id'];
     const fields = wanted.filter(f => available.includes(f));
 
     // Búsquedas en orden de preferencia
@@ -446,18 +413,12 @@ async function lookupViaJsonRpc(config, cleanNumber) {
 
       console.log('[Odoo Lookup] Found', valid.length, 'matches, best:', valid[0].name);
       const best = valid[0];
-      const [orders, tasks, tickets, customTickets, debt, lastInvoices] = await Promise.all([
+      const [orders, debt, lastInvoices] = await Promise.all([
         fetchSaleOrders(config, session, best.id).catch(e => { console.error('[Odoo] Orders error:', e); return []; }),
-        fetchTasks(config, session, best.id).catch(e => { console.error('[Odoo] Tasks error:', e); return []; }),
-        fetchTickets(config, session, best.id).catch(e => { console.error('[Odoo] Tickets error:', e); return []; }),
-        fetchCustomTickets(config, session, best.id).catch(e => { console.error('[Odoo] CustomTickets error:', e); return []; }),
         fetchDebt(config, session, best.id).catch(e => { console.error('[Odoo] Debt error:', e); return { invoiceCount: 0, totalDebt: 0 }; }),
         fetchLastInvoices(config, session, best.id).catch(e => { console.error('[Odoo] Last invoices error:', e); return []; })
       ]);
       best._saleOrders = orders || [];
-      best._tasks = tasks || [];
-      best._tickets = tickets || [];
-      best._customTickets = customTickets || [];
       best._debt = debt || { invoiceCount: 0, totalDebt: 0 };
       best._lastInvoices = lastInvoices || [];
       return valid;
@@ -534,10 +495,19 @@ async function handleNumberTyped(number) {
   return [];
 }
 
+// Dirección del servicio: la de entrega de las suscripciones; si no hay, la de la ficha
 function formatAddress(c) {
   if (!c) return '';
+  for (const o of c._saleOrders || []) {
+    const ps = o.partner_shipping_id;
+    if (Array.isArray(ps) && ps[0] !== c.id) {
+      const addr = String(ps[1] || '').replace(/^[^,]+,\s*/, '').trim();
+      if (addr) return addr;
+    }
+  }
   const name = (v) => Array.isArray(v) ? v[1] : (v || '');
-  return [c.street, c.street2, c.city, name(c.state_id)].filter(Boolean).join(', ');
+  return [c.street, c.street2, c.city, name(c.state_id).replace(/\s*\([A-Z]{2}\)$/, '')]
+    .filter(p => p && p !== c.name).join(', ');
 }
 
 function showPopupNotification(number, callerInfo) {
