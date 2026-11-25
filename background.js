@@ -12,7 +12,8 @@ let state = {
   lastLookupTime: 0,
   lastOdooAuth: null,
   lastOdooAuthTime: 0,
-  partnerFields: null
+  partnerFields: null,
+  lastAuthError: null
 };
 
 async function getConfig() {
@@ -168,92 +169,114 @@ async function lookupInOdoo(number) {
   return null;
 }
 
-async function authenticateOdoo(config) {
-  const baseUrl = config.odooUrl.replace(/\/+$/, '');
-
-  // Use cached auth if less than 5 minutes old
-  if (state.lastOdooAuth && (Date.now() - state.lastOdooAuthTime < 300000)) {
-    console.log('[Odoo Auth] Using cached session');
-    return state.lastOdooAuth;
-  }
-
-  const password = config.odooApiKey || config.odooPassword || '';
-  const login = config.odooUsername || 'admin';
-  const db = config.odooDb;
-
-  console.log('[Odoo Auth] Authenticating to', baseUrl);
-  const res = await fetch(`${baseUrl}/web/session/authenticate`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-    redirect: 'follow',
-    body: JSON.stringify({
-      jsonrpc: '2.0', method: 'call',
-      params: { db, login, password }
-    })
-  });
-
-  const text = await res.text();
-  let data;
-  try { data = JSON.parse(text); } catch (e) {
-    console.log('[Odoo Auth] Failed to parse response:', text.substring(0, 100));
-    return null;
-  }
-  if (!data.result?.uid) {
-    console.log('[Odoo Auth] Auth failed, no uid in response');
-    return null;
-  }
-  console.log('[Odoo Auth] Authenticated as uid:', data.result.uid);
-  state.lastOdooAuth = { uid: data.result.uid, db, login };
-  state.lastOdooAuthTime = Date.now();
-  return state.lastOdooAuth;
-}
-
-async function odooCall(config, model, method, args, kwargs, retried) {
-  const baseUrl = config.odooUrl.replace(/\/+$/, '');
-
+async function postJson(url, payload) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10000);
-
   try {
-    const res = await fetch(`${baseUrl}/web/dataset/call_kw`, {
+    const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
       redirect: 'follow',
       signal: controller.signal,
-      body: JSON.stringify({
-        jsonrpc: '2.0', method: 'call',
-        params: { model, method, args, kwargs: kwargs || {} }
-      })
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'call', params: payload })
     });
-    clearTimeout(timeout);
-
     const text = await res.text();
-    let parsed;
-    try {
-      parsed = JSON.parse(text);
-    } catch (e) {
-      console.log('[Odoo Call] Parse error:', model, method, text.substring(0, 100));
+    try { return JSON.parse(text); } catch (e) {
       return { error: { message: `Respuesta inválida de Odoo (HTTP ${res.status})` } };
     }
-    if (parsed.error) {
-      const msg = parsed.error.data?.message || parsed.error.message || 'Error desconocido';
-      console.log('[Odoo Call] Error response:', model, method, msg);
-      // La sesión del navegador pudo expirar o cambiar: re-autenticar una vez
-      if (!retried && /session/i.test(parsed.error.data?.name || '')) {
-        state.lastOdooAuth = null;
-        state.lastOdooAuthTime = 0;
-        if (await authenticateOdoo(config)) return odooCall(config, model, method, args, kwargs, true);
-      }
-      return { error: { message: msg } };
-    }
-    return parsed;
   } catch (e) {
-    clearTimeout(timeout);
-    console.error('[Odoo Call] Fetch error:', model, method, e.message);
     return { error: { message: e.name === 'AbortError' ? 'Odoo no respondió a tiempo' : e.message } };
+  } finally {
+    clearTimeout(timeout);
   }
+}
+
+function rpcError(data) {
+  return data?.error ? (data.error.data?.message || data.error.message || 'Error desconocido') : null;
+}
+
+// Devuelve { uid, db, login, mode: 'apikey'|'session', key? } o null (motivo en state.lastAuthError)
+async function authenticateOdoo(config, force) {
+  const baseUrl = config.odooUrl.replace(/\/+$/, '');
+
+  // Use cached auth if less than 5 minutes old
+  if (!force && state.lastOdooAuth && (Date.now() - state.lastOdooAuthTime < 300000)) {
+    console.log('[Odoo Auth] Using cached session');
+    return state.lastOdooAuth;
+  }
+
+  const login = config.odooUsername || 'admin';
+  const db = config.odooDb;
+  const errors = [];
+  let auth = null;
+
+  // 1) API Key: solo es válida en la API externa (/jsonrpc), NO en el login web
+  if (config.odooApiKey) {
+    const data = await postJson(`${baseUrl}/jsonrpc`, { service: 'common', method: 'authenticate', args: [db, login, config.odooApiKey, {}] });
+    if (data.result) auth = { uid: data.result, db, login, mode: 'apikey', key: config.odooApiKey };
+    else errors.push(`API Key: ${rpcError(data) || 'usuario o API Key inválidos'}`);
+  }
+
+  // 2) Usuario y contraseña: login web
+  if (!auth && config.odooPassword) {
+    const data = await postJson(`${baseUrl}/web/session/authenticate`, { db, login, password: config.odooPassword });
+    if (data.result?.uid) auth = { uid: data.result.uid, db, login, mode: 'session' };
+    else errors.push(`Contraseña: ${rpcError(data) || 'usuario o contraseña inválidos'}`);
+  }
+
+  // 3) Sesión de Odoo ya abierta en este navegador
+  if (!auth) {
+    const data = await postJson(`${baseUrl}/web/session/get_session_info`, {});
+    if (data.result?.uid) auth = { uid: data.result.uid, db: data.result.db || db, login: data.result.username || login, mode: 'session' };
+    else errors.push('No hay una sesión de Odoo abierta en el navegador');
+  }
+
+  if (!auth) {
+    state.lastAuthError = errors.join(' · ');
+    console.log('[Odoo Auth] Failed:', state.lastAuthError);
+    return null;
+  }
+  console.log('[Odoo Auth] Authenticated as uid:', auth.uid, 'mode:', auth.mode);
+  state.lastAuthError = null;
+  state.lastOdooAuth = auth;
+  state.lastOdooAuthTime = Date.now();
+  return auth;
+}
+
+async function odooCall(config, model, method, args, kwargs, retried) {
+  const baseUrl = config.odooUrl.replace(/\/+$/, '');
+  const auth = state.lastOdooAuth;
+
+  const data = auth?.mode === 'apikey'
+    ? await postJson(`${baseUrl}/jsonrpc`, { service: 'object', method: 'execute_kw', args: [auth.db, auth.uid, auth.key, model, method, args, kwargs || {}] })
+    : await postJson(`${baseUrl}/web/dataset/call_kw`, { model, method, args, kwargs: kwargs || {} });
+
+  const msg = rpcError(data);
+  if (msg) {
+    console.log('[Odoo Call] Error response:', model, method, msg);
+    // La sesión del navegador pudo expirar o cambiar: re-autenticar una vez
+    if (!retried && auth?.mode !== 'apikey' && /session/i.test(data.error.data?.name || '')) {
+      if (await authenticateOdoo(config, true)) return odooCall(config, model, method, args, kwargs, true);
+    }
+    return { error: { message: msg } };
+  }
+  return data;
+}
+
+async function testOdooConnection(config) {
+  if (!config.odooUrl || !config.odooDb) return { success: false, error: 'Completa URL y base de datos primero' };
+  state.lastOdooAuth = null;
+  state.partnerFields = null;
+  const auth = await authenticateOdoo(config, true);
+  if (!auth) return { success: false, error: state.lastAuthError || 'No se pudo iniciar sesión' };
+  const data = await odooCall(config, 'res.partner', 'search_read', [[]], { fields: ['id'], limit: 1 });
+  if (data.error) return { success: false, error: `Sesión OK, pero falló la búsqueda: ${data.error.message}` };
+  // La prueba usa la config del formulario (quizá sin guardar): no dejarla en caché
+  state.lastOdooAuth = null;
+  state.partnerFields = null;
+  const how = auth.mode === 'apikey' ? 'API Key' : 'sesión web';
+  return { success: true, message: `Conexión exitosa (${how}, usuario ${auth.login})` };
 }
 
 async function odooSearch(config, session, model, domain, fields, limit, order) {
@@ -373,7 +396,7 @@ async function lookupViaJsonRpc(config, cleanNumber) {
     const session = await authenticateOdoo(config);
     if (!session) {
       console.log('[Odoo Lookup] Auth failed');
-      return { error: 'No se pudo iniciar sesión en Odoo. Revisa usuario, contraseña/API Key y base de datos en las opciones.' };
+      return { error: `No se pudo iniciar sesión en Odoo. ${state.lastAuthError || ''}`.trim() };
     }
 
     const available = await getPartnerFields(config);
@@ -563,7 +586,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     case 'getStatus': getStatus().then(sendResponse); return true;
     case 'getCallLog': getCallLog().then(sendResponse); return true;
     case 'authenticate': (async () => { const c = await getConfig(); sendResponse(await authenticate(c)); })(); return true;
-    case 'updateConfig': (async () => { await saveConfig(msg.config); sendResponse({ success: true }); })(); return true;
+    case 'updateConfig': (async () => { await saveConfig(msg.config); state.lastOdooAuth = null; state.partnerFields = null; sendResponse({ success: true }); })(); return true;
+    case 'testOdoo': (async () => { sendResponse(await testOdooConnection(msg.config)); })(); return true;
     case 'getConfig': (async () => { sendResponse(await getConfig()); })(); return true;
     case 'lookupInOdoo': (async () => { sendResponse(await lookupInOdoo(msg.number)); })(); return true;
     case 'handleNumberTyped': (async () => { sendResponse(await handleNumberTyped(msg.number)); })(); return true;
@@ -579,6 +603,10 @@ async function openInOdoo(model, id, viewType) {
     chrome.tabs.create({ url: `${config.odooUrl.replace(/\/+$/, '')}/web#id=${id}&model=${model || 'res.partner'}&view_type=${viewType || 'form'}` });
   }
 }
+
+chrome.storage.onChanged.addListener((changes) => {
+  if (changes[STORAGE_KEYS.CONFIG]) { state.lastOdooAuth = null; state.partnerFields = null; state.lastLookupResult = null; }
+});
 
 chrome.runtime.onStartup.addListener(() => { state.callState = CALL_STATE.IDLE; updateBadge(); });
 updateBadge();

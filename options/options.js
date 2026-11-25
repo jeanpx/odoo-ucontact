@@ -125,86 +125,14 @@ document.addEventListener('DOMContentLoaded', () => {
       result.className = 'test-result';
 
       const cfg = readForm();
-      if (!cfg.odooUrl || !cfg.odooDb) {
-        result.textContent = '✗ Completa URL y base de datos primero';
-        result.className = 'test-result error';
-        btn.disabled = false;
-        btn.textContent = 'Probar conexión a Odoo';
-        return;
-      }
-
       try {
-        const baseUrl = cfg.odooUrl.replace(/\/+$/, '');
-        const password = cfg.odooApiKey || cfg.odooPassword || '';
-
-        const authRes = await fetch(`${baseUrl}/web/session/authenticate`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          redirect: 'follow',
-          body: JSON.stringify({
-            jsonrpc: '2.0', method: 'call',
-            params: { db: cfg.odooDb, login: cfg.odooUsername || 'admin', password }
-          })
-        });
-
-        const authText = await authRes.text();
-        let authData;
-        try { authData = JSON.parse(authText); } catch (e) {
-          result.textContent = `✗ El servidor no responde como Odoo. Inicio: ${authText.substring(0, 80)}`;
-          result.className = 'test-result error';
-          btn.disabled = false;
-          btn.textContent = 'Probar conexión a Odoo';
-          return;
-        }
-
-        if (authData.error) {
-          const msg = authData.error.data?.message || authData.error.message || 'Error de autenticación';
-          result.textContent = `✗ ${msg}`;
-          result.className = 'test-result error';
-          btn.disabled = false;
-          btn.textContent = 'Probar conexión a Odoo';
-          return;
-        }
-
-        if (!authData.result?.uid) {
-          result.textContent = '✗ Credenciales inválidas';
-          result.className = 'test-result error';
-          btn.disabled = false;
-          btn.textContent = 'Probar conexión a Odoo';
-          return;
-        }
-
-        const searchRes = await fetch(`${baseUrl}/web/dataset/call_kw`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          redirect: 'follow',
-          body: JSON.stringify({
-            jsonrpc: '2.0', method: 'call',
-            params: {
-              model: 'res.partner',
-              method: 'search_read',
-              args: [[]],
-              kwargs: { fields: ['id'], limit: 1 }
-            }
-          })
-        });
-        const searchText = await searchRes.text();
-        let searchData;
-        try { searchData = JSON.parse(searchText); } catch (e) {
-          result.textContent = `✗ Búsqueda falló: ${searchText.substring(0, 100)}`;
-          result.className = 'test-result error';
-          btn.disabled = false;
-          btn.textContent = 'Probar conexión a Odoo';
-          return;
-        }
-
-        if (searchData.result) {
-          result.textContent = '✓ Conexión exitosa a Odoo';
+        // Usa la misma lógica de autenticación que las búsquedas reales
+        const res = await chrome.runtime.sendMessage({ action: 'testOdoo', config: cfg });
+        if (res?.success) {
+          result.textContent = `✓ ${res.message}`;
           result.className = 'test-result success';
         } else {
-          result.textContent = `✗ ${searchData.error?.data?.message || 'Error en búsqueda'}`;
+          result.textContent = `✗ ${res?.error || 'Error desconocido'}`;
           result.className = 'test-result error';
         }
       } catch (err) {
