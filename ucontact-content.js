@@ -1,5 +1,3 @@
-let lookupTimer = null;
-let lastNumberLookedUp = '';
 let lastOutputNumber = '';
 let outputDebounceTimer = null;
 const activePopups = [];
@@ -18,12 +16,11 @@ console.log('[uContact Odoo] Content script loaded, hostname:', window.location.
 
 function init() {
   console.log('[uContact Odoo] init() called');
+  // Solo se busca en Odoo en dos casos: al digitar en el textarea #output
+  // del softphone y al recibir una llamada.
   listenForPostMessages();
-  monitorPhoneInput();
   monitorOutputTextarea();
   injectCustomerPopupStyles();
-  detectClickToCall();
-  detectCallInDOM();
 }
 
 function monitorOutputTextarea() {
@@ -110,10 +107,6 @@ function listenForPostMessages() {
         console.log('[uContact Odoo] Incoming call detected:', data.params.number);
         handleIncomingCall(data.params.number, data);
       }
-      else if (data.action === 'makeCall' && data.params?.number) {
-        console.log('[uContact Odoo] Outgoing call detected:', data.params.number);
-        handleOutgoingCall(data.params.number, data);
-      }
       else if (data.action === 'finishedCall') {
         console.log('[uContact Odoo] Call ended');
         handleCallEnded(data);
@@ -136,111 +129,10 @@ function listenForPostMessages() {
   });
 }
 
-function monitorPhoneInput() {
-  const observer = new MutationObserver(() => {
-    findPhoneInputs();
-    findDialerInput();
-  });
-  observer.observe(document.body, { childList: true, subtree: true });
-  findPhoneInputs();
-  findDialerInput();
-}
-
-function findDialerInput() {
-  // Look for the uPhone dialer input - it might be in an iframe or shadow DOM
-  const dialInputs = document.querySelectorAll(
-    'input[placeholder*="marcar" i], input[placeholder*="dial" i], input[placeholder*="phone" i], ' +
-    'input[placeholder*="number" i], input[placeholder*="tel" i], input[data-component*="dial" i], ' +
-    'input.dialer-input, input.phone-input, input[class*="dial"], input[class*="phone"], ' +
-    '[class*="dialer"] input, [class*="softphone"] input, [id*="dial"] input, [id*="phone"] input'
-  );
-
-  dialInputs.forEach(input => {
-    if (input.dataset.ucontactDialMonitored) return;
-    input.dataset.ucontactDialMonitored = 'true';
-    console.log('[uContact Odoo] Dialer input found:', input.placeholder || input.id || input.className || '(unknown)');
-    
-    ['input', 'change', 'propertychange'].forEach(evt => {
-      input.addEventListener(evt, () => onPhoneInput(input));
-    });
-    
-    // Check current value immediately
-    if (input.value) onPhoneInput(input);
-  });
-}
-
-function findPhoneInputs() {
-  const inputs = document.querySelectorAll('input[type="tel"], input[placeholder*="tel"], input[placeholder*="phone"], input[placeholder*="Phone"], input[placeholder*="número"], input[placeholder*="numero"], input[placeholder*="Number"], input[name*="phone"], input[name*="number"], input[aria-label*="phone" i], input[aria-label*="call" i], input[aria-label*="dial" i]');
-
-  inputs.forEach((input) => {
-    if (input.dataset.ucontactMonitored) return;
-    input.dataset.ucontactMonitored = 'true';
-    input.addEventListener('input', () => onPhoneInput(input));
-    input.addEventListener('change', () => onPhoneInput(input));
-  });
-
-  const phoneContainers = document.querySelectorAll('[class*="phone"], [class*="Phone"], [class*="dial"], [class*="Dial"], [class*="softphone"], [class*="Softphone"], [id*="phone"], [id*="Phone"], [id*="dial"]');
-  phoneContainers.forEach((container) => {
-    const textInputs = container.querySelectorAll('input[type="text"], input:not([type])');
-    textInputs.forEach((input) => {
-      if (input.dataset.ucontactMonitored) return;
-      if (input.closest('.o_field_phone')) return;
-      input.dataset.ucontactMonitored = 'true';
-      input.addEventListener('input', () => onPhoneInput(input));
-      input.addEventListener('change', () => onPhoneInput(input));
-    });
-  });
-
-  const allInputs = document.querySelectorAll('input');
-  allInputs.forEach((input) => {
-    if (input.dataset.ucontactMonitored) return;
-    if (input.type === 'text' || !input.type) {
-      const val = input.value;
-      if (val && /^[+\d\s\-()]{7,}$/.test(val.trim())) {
-        input.dataset.ucontactMonitored = 'true';
-        input.addEventListener('input', () => onPhoneInput(input));
-        input.addEventListener('change', () => onPhoneInput(input));
-      }
-    }
-  });
-}
-
-function onPhoneInput(input) {
-  const digits = normalizePhone(input.value);
-
-  // Solo buscar con el número completo (9 dígitos, sin prefijo de país)
-  if (digits.length !== TYPED_NUMBER_LENGTH) {
-    clearTimeout(lookupTimer);
-    lastNumberLookedUp = '';
-    return;
-  }
-
-  if (digits === lastNumberLookedUp) return;
-
-  clearTimeout(lookupTimer);
-  lookupTimer = setTimeout(() => {
-    lastNumberLookedUp = digits;
-    lookupAndShowCustomer(digits, input);
-  }, 600);
-}
-
-function lookupAndShowCustomer(number, inputElement) {
-  const rect = inputElement ? inputElement.getBoundingClientRect() : null;
-  showLoadingPopup(number, rect);
-  lookupNumber(number, (response) => {
-    if (!response || response.length === 0) {
-      showNotFoundPopup(number, rect);
-      return;
-    }
-    showCustomerPopup(response, number, rect);
-  });
-}
-
 function handleIncomingCall(number, rawData) {
   const digits = normalizePhone(number);
   // Evita que el monitor del textarea/dialer dispare un segundo popup para el mismo número
   lastOutputNumber = digits;
-  lastNumberLookedUp = digits;
   hideCustomerPopup();
   const rect = findSoftphoneRect();
   showLoadingPopup(number, rect);
@@ -253,20 +145,6 @@ function handleIncomingCall(number, rawData) {
     }
     // El background reutiliza el resultado en caché para el badge, el log y la notificación
     chrome.runtime.sendMessage({ action: 'handleIncomingCall', number, extraData: rawData }).catch(() => {});
-  });
-}
-
-function handleOutgoingCall(number, rawData) {
-  const rect = findSoftphoneRect();
-  showLoadingPopup(number, rect);
-  lookupNumber(number, (contacts) => {
-    console.log('[uContact Odoo] handleOutgoingCall: lookup result:', contacts?.length || 0, 'contacts');
-    if (contacts && contacts.length > 0) {
-      broadcastToPopup({ type: 'outgoingCallWithData', number, contacts });
-      showCustomerPopup(contacts, number, rect);
-    } else {
-      showNotFoundPopup(number, rect);
-    }
   });
 }
 
@@ -636,69 +514,6 @@ function injectCustomerPopupStyles() {
     }
   `;
   document.head.appendChild(style);
-}
-
-function detectClickToCall() {
-  document.addEventListener('click', (e) => {
-    let target = e.target.closest('a[href^="tel:"], [class*="call"], [class*="dial"], [class*="llamar"], [class*="marcar"], [id*="call"], [id*="dial"], [data-action*="call"], [data-action*="dial"]');
-    
-    if (!target) {
-      const el = e.target;
-      const text = (el.textContent || el.title || el.getAttribute('aria-label') || '').trim();
-      if (/^[\+\d][\d\s\-\(\)]{6,}$/.test(text) || /tel[eé]fono|m[vó]vil|phone|mobile/i.test(text)) {
-        target = el;
-      }
-    }
-
-    if (target) {
-      const text = target.textContent || target.title || target.getAttribute('aria-label') || target.innerText || '';
-      const numbers = text.match(/[\+\d][\d\s\-\(\)]{7,}/g);
-      if (numbers) {
-        const num = numbers[0].replace(/[^0-9]/g, '');
-        if (num.length >= 7) {
-          console.log('[uContact Odoo] Click-to-call detected:', num);
-          const rect = target.getBoundingClientRect();
-          showLoadingPopup(num, rect);
-          lookupNumber(num, (contacts) => {
-            if (contacts && contacts.length > 0) {
-              showCustomerPopup(contacts, num, rect);
-            } else {
-              showNotFoundPopup(num, rect);
-            }
-          });
-        }
-      }
-    }
-  }, true);
-}
-
-function detectCallInDOM() {
-  const seen = new Set();
-  setInterval(() => {
-    const elements = document.querySelectorAll('[class*="call"], [class*="llamada"], [class*="active-call"], [class*="call-info"], [class*="caller"], [id*="call"], [id*="llamada"], [class*="contact-card"], [class*="contact-info"], [class*="caller-info"]');
-    elements.forEach(el => {
-      if (seen.has(el)) return;
-      seen.add(el);
-      const text = el.textContent || '';
-      const numbers = text.match(/[\+\d][\d\s\-\(\)]{7,}/g);
-      if (numbers) {
-        const num = numbers[0].replace(/[^0-9]/g, '');
-        if (num.length >= 7 && !el.dataset.ucontactChecked) {
-          el.dataset.ucontactChecked = '1';
-          console.log('[uContact Odoo] Call element detected:', num);
-          const rect = el.getBoundingClientRect();
-          showLoadingPopup(num, rect);
-          lookupNumber(num, (contacts) => {
-            if (contacts && contacts.length > 0) {
-              showCustomerPopup(contacts, num, rect);
-            } else {
-              showNotFoundPopup(num, rect);
-            }
-          });
-        }
-      }
-    });
-  }, 2000);
 }
 
 if (document.readyState === 'loading') {
