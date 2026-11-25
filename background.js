@@ -375,10 +375,24 @@ async function fetchLastInvoices(config, session, partnerId) {
         delete inv.invoice_line_ids; delete inv.subscriptions;
         delete inv.x_studio_nro_suscripcion; delete inv.x_studio_close_reason_id;
       });
+      await attachSubscriptionStages(config, invoices);
       return invoices;
     }
   } catch (e) { console.error('[Odoo Last Invoices] Error:', e); }
   return [];
+}
+
+// Etapa de suscripción (stage_id → sale.subscription.stage): se busca la suscripción por su código
+async function attachSubscriptionStages(config, invoices) {
+  try {
+    const codes = [...new Set(invoices.map(inv => inv.sub?.code).filter(Boolean))];
+    if (!codes.length) return;
+    const data = await odooCall(config, 'sale.subscription', 'search_read', [[['code', 'in', codes]]], { fields: ['code', 'stage_id'] });
+    if (data.error) { console.log('[Odoo Subscriptions] sale.subscription no disponible:', data.error.message); return; }
+    const stageByCode = {};
+    (data.result || []).forEach(s => { if (Array.isArray(s.stage_id)) stageByCode[s.code] = s.stage_id[1]; });
+    invoices.forEach(inv => { if (inv.sub && stageByCode[inv.sub.code]) inv.sub.state = stageByCode[inv.sub.code]; });
+  } catch (e) { console.error('[Odoo Subscriptions] Stage error:', e); }
 }
 
 // Campos de sale.order que se muestran como Sub Order / Cod. suscripción / Estado sus.
@@ -392,7 +406,7 @@ async function getSubscriptionFields(config) {
   const picked = {
     subOrder: all.x_studio_subs_order ? 'x_studio_subs_order' : find(/^x_.*subs?_?order|^subs?_?order/i, /subs?\s*order/i),
     code: find(/^x_.*(cod|code).*sus|subscription_code|cod_suscrip/i, /c[oó]d.*suscrip|suscrip.*c[oó]d|subscription code/i) || 'name',
-    state: find(/^x_.*estado.*sus|^subscription_state$/i, /estado.*sus/i) || 'state'
+    state: all.stage_id ? 'stage_id' : (find(/^x_.*estado.*sus|^subscription_state$/i, /estado.*sus/i) || 'state')
   };
   console.log('[Odoo Subscriptions] Campos usados en sale.order:', picked,
     'Candidatos:', Object.keys(all).filter(f => /sus|subscri|order/i.test(f + ' ' + all[f].string)).map(f => `${f} (${all[f].string})`));
