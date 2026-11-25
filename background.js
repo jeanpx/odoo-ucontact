@@ -399,20 +399,22 @@ const m2oId = v => Array.isArray(v) ? v[0] : (v || null);
 // Sub order (x_studio_subs_order) está en el pedido de la suscripción, p. ej. "MEN/2645510" para el código 2645510
 async function fillSubOrderFromSaleOrder(config, invoices) {
   const soFields = await modelFields(config, 'sale.order');
-  if (!soFields?.x_studio_subs_order) return;
+  if (!soFields?.x_studio_subs_order) { console.log('[Odoo Subscriptions] sale.order sin x_studio_subs_order (o sin acceso):', !!soFields); return; }
   const pending = invoices.filter(inv => !inv.sub.subOrder && (inv.sub.code || inv.invoice_origin));
   if (!pending.length) return;
   const codes = [...new Set(pending.map(inv => String(inv.sub.code || '')).filter(Boolean))];
   const origins = [...new Set(pending.map(inv => inv.invoice_origin).filter(Boolean))];
-  const leaves = [...codes.map(c => ['name', '=like', `%/${c}`]), ...codes.map(c => ['name', '=', c]), ...(origins.length ? [['name', 'in', origins]] : [])];
+  const leaves = [...codes.map(c => ['name', 'ilike', c]), ...(soFields.client_order_ref ? codes.map(c => ['client_order_ref', 'ilike', c]) : []), ...(origins.length ? [['name', 'in', origins]] : [])];
   if (!leaves.length) return;
   const domain = [...Array(leaves.length - 1).fill('|'), ...leaves];
-  const data = await odooCall(config, 'sale.order', 'search_read', [domain], { fields: ['name', 'x_studio_subs_order'], limit: 50 });
+  const extra = soFields.client_order_ref ? ['client_order_ref'] : [];
+  console.log('[Odoo Subscriptions] Buscando sale.order para códigos', codes, 'orígenes', origins);
+  const data = await odooCall(config, 'sale.order', 'search_read', [domain], { fields: ['name', 'x_studio_subs_order', ...extra], limit: 50 });
   if (data.error) { console.log('[Odoo Subscriptions] Sub order search error:', data.error.message); return; }
   const byName = {};
   (data.result || []).forEach(o => { byName[o.name] = o; });
   const find = (inv) => byName[inv.invoice_origin]
-    || (data.result || []).find(o => inv.sub.code && (o.name === String(inv.sub.code) || o.name.endsWith('/' + inv.sub.code)));
+    || (data.result || []).find(o => inv.sub.code && [o.name, o.client_order_ref].some(n => n && String(n).includes(String(inv.sub.code))));
   pending.forEach(inv => {
     const o = find(inv);
     if (o && o.x_studio_subs_order !== false && o.x_studio_subs_order != null) inv.sub.subOrder = String(o.x_studio_subs_order);
@@ -455,11 +457,19 @@ async function readSubscriptionRecords(config, model, ids) {
 }
 
 async function attachSubscriptions(config, invoices, subIdsByMove, saleLinesByMove) {
-  const hasSubModel = !!(await modelFields(config, 'sale.subscription'));
+  // account.move.line.subscription_id apunta a sale.subscription (Odoo ≤15) o a sale.order (Odoo 16+)
+  const lineMeta = await modelFields(config, 'account.move.line');
+  const subRelation = lineMeta?.subscription_id?.relation || 'sale.subscription';
+  const hasSubModel = subRelation === 'sale.subscription' && !!(await modelFields(config, 'sale.subscription'));
   const subIdByInv = {};
+  const orderIdByInv = {};
 
   // 1) Enlace directo desde las líneas de la factura
-  invoices.forEach(inv => { if (subIdsByMove[inv.id]?.length) subIdByInv[inv.id] = subIdsByMove[inv.id][0]; });
+  invoices.forEach(inv => {
+    const id = subIdsByMove[inv.id]?.[0];
+    if (!id) return;
+    if (subRelation === 'sale.order') orderIdByInv[inv.id] = id; else subIdByInv[inv.id] = id;
+  });
 
   // 2) Si no, por el nro. de suscripción u origen de la factura
   if (hasSubModel) {
@@ -494,8 +504,7 @@ async function attachSubscriptions(config, invoices, subIdsByMove, saleLinesByMo
   }
 
   // 3) Sin sale.subscription: la suscripción es el propio pedido (sale.order)
-  const orderIdByInv = {};
-  const missing = invoices.filter(inv => !subs[subIdByInv[inv.id]]);
+  const missing = invoices.filter(inv => !subs[subIdByInv[inv.id]] && !orderIdByInv[inv.id]);
   const solIds = [...new Set(missing.flatMap(inv => saleLinesByMove[inv.id] || []))];
   if (solIds.length) {
     const sol = await odooCall(config, 'sale.order.line', 'read', [solIds], { fields: ['order_id'] });
