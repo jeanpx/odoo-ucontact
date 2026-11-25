@@ -277,14 +277,14 @@ async function odooCall(config, model, method, args, kwargs, retried) {
 async function testOdooConnection(config) {
   if (!config.odooUrl || !config.odooDb) return { success: false, error: 'Completa URL y base de datos primero' };
   state.lastOdooAuth = null;
-  state.partnerFields = null; state.subscriptionFields = null;
+  state.partnerFields = null; state.subscriptionFields = null; state.modelFields = null;
   const auth = await authenticateOdoo(config, true);
   if (!auth) return { success: false, error: state.lastAuthError || 'No se pudo iniciar sesión' };
   const data = await odooCall(config, 'res.partner', 'search_read', [[]], { fields: ['id'], limit: 1 });
   if (data.error) return { success: false, error: `Sesión OK, pero falló la búsqueda: ${data.error.message}` };
   // La prueba usa la config del formulario (quizá sin guardar): no dejarla en caché
   state.lastOdooAuth = null;
-  state.partnerFields = null; state.subscriptionFields = null;
+  state.partnerFields = null; state.subscriptionFields = null; state.modelFields = null;
   const how = auth.mode === 'apikey' ? 'API Key' : 'sesión web';
   return { success: true, message: `Conexión exitosa (${how}, usuario ${auth.login})` };
 }
@@ -339,111 +339,141 @@ async function fetchDebt(config, session, partnerId) {
 
 async function fetchLastInvoices(config, session, partnerId) {
   try {
-    const domain = [['partner_id', '=', partnerId], ['move_type', '=', 'out_invoice'], ['state', '=', 'posted']];
-    const base = ['name', 'invoice_date', 'invoice_date_due', 'amount_total', 'amount_residual', 'payment_state', 'currency_id', 'invoice_line_ids'];
-    // Campos Studio de la factura: nro. de suscripción y motivo de suspensión/baja
-    let data = await odooSearch(config, session, 'account.move', domain, [...base, 'x_studio_nro_suscripcion', 'x_studio_close_reason_id'], 5, 'invoice_date desc, id desc');
-    if (data.error) data = await odooSearch(config, session, 'account.move', domain, base, 5, 'invoice_date desc, id desc');
-    if (data.result?.length > 0) {
-      const invoices = data.result;
-      // Descripción de cada factura = nombre de sus líneas (p. ej. "BAJA INTERNET: 01-11-26 - 24-11-26")
-      const lineIds = invoices.flatMap(inv => inv.invoice_line_ids || []);
-      if (lineIds.length) {
-        try {
-          let lines = await odooCall(config, 'account.move.line', 'read', [lineIds], { fields: ['name', 'move_id', 'display_type', 'sale_line_ids'] });
-          if (lines.error) lines = await odooCall(config, 'account.move.line', 'read', [lineIds], { fields: ['name', 'move_id', 'display_type'] });
-          const byMove = {}, saleLinesByMove = {};
-          (lines.result || []).forEach(l => {
-            const moveId = Array.isArray(l.move_id) ? l.move_id[0] : l.move_id;
-            if (l.sale_line_ids?.length) (saleLinesByMove[moveId] = saleLinesByMove[moveId] || []).push(...l.sale_line_ids);
-            if (!l.name || ['line_section', 'line_note'].includes(l.display_type)) return;
-            (byMove[moveId] = byMove[moveId] || []).push(l.name.trim());
-          });
-          invoices.forEach(inv => { inv.lines = byMove[inv.id] || []; });
-          await attachSubscriptions(config, invoices, saleLinesByMove);
-        } catch (e) { console.error('[Odoo Last Invoices] Lines error:', e); }
-      }
-      invoices.forEach(inv => {
-        const so = (inv.subscriptions || [])[0] || {};
-        const reason = inv.x_studio_close_reason_id;
-        inv.sub = {
-          subOrder: so.subOrder || '',
-          code: inv.x_studio_nro_suscripcion || so.code || '',
-          state: so.state || '',
-          reason: Array.isArray(reason) ? reason[1] : ''
-        };
-        delete inv.invoice_line_ids; delete inv.subscriptions;
-        delete inv.x_studio_nro_suscripcion; delete inv.x_studio_close_reason_id;
+    const moveFields = await modelFields(config, 'account.move');
+    const fields = ['name', 'invoice_date', 'invoice_date_due', 'amount_total', 'amount_residual', 'payment_state', 'invoice_line_ids', 'invoice_origin', 'x_studio_nro_suscripcion']
+      .filter(f => !moveFields || moveFields[f]);
+    const data = await odooSearch(config, session, 'account.move',
+      [['partner_id', '=', partnerId], ['move_type', '=', 'out_invoice'], ['state', '=', 'posted']],
+      fields, 5, 'invoice_date desc, id desc'
+    );
+    if (!data.result?.length) return [];
+    const invoices = data.result;
+
+    // Líneas: descripción (p. ej. "BAJA INTERNET: 01-11-26 - 24-11-26") y enlace a suscripción / pedido
+    const lineFields = await modelFields(config, 'account.move.line');
+    const lineIds = invoices.flatMap(inv => inv.invoice_line_ids || []);
+    const subIdsByMove = {}, saleLinesByMove = {}, descByMove = {};
+    if (lineIds.length) {
+      const lf = ['name', 'move_id', 'display_type', 'subscription_id', 'sale_line_ids'].filter(f => !lineFields || lineFields[f]);
+      const lines = await odooCall(config, 'account.move.line', 'read', [lineIds], { fields: lf });
+      (lines.result || []).forEach(l => {
+        const moveId = m2oId(l.move_id);
+        if (m2oId(l.subscription_id)) (subIdsByMove[moveId] = subIdsByMove[moveId] || []).push(m2oId(l.subscription_id));
+        if (l.sale_line_ids?.length) (saleLinesByMove[moveId] = saleLinesByMove[moveId] || []).push(...l.sale_line_ids);
+        if (!l.name || ['line_section', 'line_note'].includes(l.display_type)) return;
+        (descByMove[moveId] = descByMove[moveId] || []).push(l.name.trim());
       });
-      await attachSubscriptionStages(config, invoices);
-      return invoices;
     }
+    invoices.forEach(inv => { inv.lines = descByMove[inv.id] || []; });
+
+    try { await attachSubscriptions(config, invoices, subIdsByMove, saleLinesByMove); }
+    catch (e) { console.error('[Odoo Subscriptions] Error:', e); }
+
+    invoices.forEach(inv => {
+      inv.sub = inv.sub || { subOrder: '', code: '', state: '', reason: '' };
+      if (!inv.sub.code) inv.sub.code = inv.x_studio_nro_suscripcion || '';
+      delete inv.invoice_line_ids; delete inv.invoice_origin; delete inv.x_studio_nro_suscripcion;
+    });
+    return invoices;
   } catch (e) { console.error('[Odoo Last Invoices] Error:', e); }
   return [];
 }
 
-// Etapa de suscripción (stage_id → sale.subscription.stage): se busca la suscripción por su código
-async function attachSubscriptionStages(config, invoices) {
-  try {
-    const codes = [...new Set(invoices.map(inv => inv.sub?.code).filter(Boolean))];
-    if (!codes.length) return;
-    const data = await odooCall(config, 'sale.subscription', 'search_read', [[['code', 'in', codes]]], { fields: ['code', 'stage_id'] });
-    if (data.error) { console.log('[Odoo Subscriptions] sale.subscription no disponible:', data.error.message); return; }
-    const stageByCode = {};
-    (data.result || []).forEach(s => { if (Array.isArray(s.stage_id)) stageByCode[s.code] = s.stage_id[1]; });
-    invoices.forEach(inv => { if (inv.sub && stageByCode[inv.sub.code]) inv.sub.state = stageByCode[inv.sub.code]; });
-  } catch (e) { console.error('[Odoo Subscriptions] Stage error:', e); }
+const m2oId = v => Array.isArray(v) ? v[0] : (v || null);
+
+// Campos existentes de un modelo (null si el modelo no existe o no hay acceso). Cacheado.
+async function modelFields(config, model) {
+  state.modelFields = state.modelFields || {};
+  if (model in state.modelFields) return state.modelFields[model];
+  const data = await odooCall(config, model, 'fields_get', [], { attributes: ['string', 'type', 'selection', 'relation'] });
+  state.modelFields[model] = data.error ? null : (data.result || {});
+  return state.modelFields[model];
 }
 
-// Campos de sale.order que se muestran como Sub Order / Cod. suscripción / Estado sus.
-// Se detectan por nombre técnico o etiqueta porque pueden ser campos personalizados.
-async function getSubscriptionFields(config) {
-  if (state.subscriptionFields) return state.subscriptionFields;
-  const data = await odooCall(config, 'sale.order', 'fields_get', [], { attributes: ['string', 'type', 'selection'] });
-  if (data.error) return null;
-  const all = data.result || {};
-  const find = (nameRe, labelRe) => Object.keys(all).find(f => nameRe.test(f)) || Object.keys(all).find(f => labelRe.test(all[f].string || ''));
-  const picked = {
-    subOrder: all.x_studio_subs_order ? 'x_studio_subs_order' : find(/^x_.*subs?_?order|^subs?_?order/i, /subs?\s*order/i),
-    code: find(/^x_.*(cod|code).*sus|subscription_code|cod_suscrip/i, /c[oó]d.*suscrip|suscrip.*c[oó]d|subscription code/i) || 'name',
-    state: all.stage_id ? 'stage_id' : (find(/^x_.*estado.*sus|^subscription_state$/i, /estado.*sus/i) || 'state')
+// Lee de una suscripción (sale.subscription o sale.order) los datos que muestra la tarjeta
+async function readSubscriptionRecords(config, model, ids) {
+  const meta = await modelFields(config, model);
+  if (!meta || !ids.length) return {};
+  const wanted = ['code', 'name', 'stage_id', 'close_reason_id', 'x_studio_subs_order', 'subscription_state'].filter(f => meta[f]);
+  const data = await odooCall(config, model, 'read', [ids], { fields: wanted });
+  const show = (f, v) => {
+    if (v === false || v == null) return '';
+    if (Array.isArray(v)) return String(v[1] ?? '');
+    if (meta[f]?.type === 'selection') return (meta[f].selection || []).find(([k]) => k === v)?.[1] || String(v);
+    return String(v);
   };
-  console.log('[Odoo Subscriptions] Campos usados en sale.order:', picked,
-    'Candidatos:', Object.keys(all).filter(f => /sus|subscri|order/i.test(f + ' ' + all[f].string)).map(f => `${f} (${all[f].string})`));
-  state.subscriptionFields = { picked, meta: all };
-  return state.subscriptionFields;
+  const out = {};
+  (data.result || []).forEach(r => {
+    out[r.id] = {
+      subOrder: show('x_studio_subs_order', r.x_studio_subs_order),
+      code: show('code', r.code),
+      state: show('stage_id', r.stage_id) || show('subscription_state', r.subscription_state),
+      reason: show('close_reason_id', r.close_reason_id)
+    };
+  });
+  console.log('[Odoo Subscriptions]', model, 'campos leídos:', wanted, out);
+  return out;
 }
 
-async function attachSubscriptions(config, invoices, saleLinesByMove) {
-  try {
-    const saleLineIds = [...new Set(Object.values(saleLinesByMove).flat())];
-    if (!saleLineIds.length) return;
-    const sf = await getSubscriptionFields(config);
-    if (!sf) return;
-    const sol = await odooCall(config, 'sale.order.line', 'read', [saleLineIds], { fields: ['order_id'] });
-    const orderBySol = {};
-    (sol.result || []).forEach(l => { orderBySol[l.id] = Array.isArray(l.order_id) ? l.order_id[0] : l.order_id; });
-    const orderIds = [...new Set(Object.values(orderBySol).filter(Boolean))];
-    if (!orderIds.length) return;
+async function attachSubscriptions(config, invoices, subIdsByMove, saleLinesByMove) {
+  const hasSubModel = !!(await modelFields(config, 'sale.subscription'));
+  const subIdByInv = {};
 
-    const { picked, meta } = sf;
-    const fields = [...new Set(Object.values(picked).filter(Boolean))];
-    const orders = await odooCall(config, 'sale.order', 'read', [orderIds], { fields });
-    const display = (f, v) => {
-      if (!f || v === false || v == null) return '';
-      if (Array.isArray(v)) return String(v[1] ?? '');
-      if (meta[f]?.type === 'selection') return (meta[f].selection || []).find(([k]) => k === v)?.[1] || String(v);
-      return String(v);
-    };
-    const subs = {};
-    (orders.result || []).forEach(o => {
-      subs[o.id] = { subOrder: display(picked.subOrder, o[picked.subOrder]), code: display(picked.code, o[picked.code]), state: display(picked.state, o[picked.state]) };
+  // 1) Enlace directo desde las líneas de la factura
+  invoices.forEach(inv => { if (subIdsByMove[inv.id]?.length) subIdByInv[inv.id] = subIdsByMove[inv.id][0]; });
+
+  // 2) Si no, por el nro. de suscripción u origen de la factura
+  if (hasSubModel) {
+    const missing = invoices.filter(inv => !subIdByInv[inv.id]);
+    const keys = [...new Set(missing.flatMap(inv => [inv.x_studio_nro_suscripcion, inv.invoice_origin]).filter(Boolean).map(String))];
+    if (keys.length) {
+      const found = await odooCall(config, 'sale.subscription', 'search_read',
+        [['|', ['code', 'in', keys], ['name', 'in', keys]]], { fields: ['code', 'name'] });
+      const byKey = {};
+      (found.result || []).forEach(s => { byKey[s.code] = s.id; byKey[s.name] = s.id; });
+      missing.forEach(inv => {
+        const id = byKey[inv.x_studio_nro_suscripcion] || byKey[inv.invoice_origin];
+        if (id) subIdByInv[inv.id] = id;
+      });
+    }
+  }
+
+  const subIds = [...new Set(Object.values(subIdByInv))];
+  const subs = hasSubModel ? await readSubscriptionRecords(config, 'sale.subscription', subIds) : {};
+
+  // Sub order vive en sale.order: el pedido vinculado a la suscripción
+  const soFields = await modelFields(config, 'sale.order');
+  const solFields = await modelFields(config, 'sale.order.line');
+  if (soFields?.x_studio_subs_order && solFields?.subscription_id) {
+    for (const id of subIds) {
+      if (!subs[id] || subs[id].subOrder) continue;
+      const so = await odooCall(config, 'sale.order', 'search_read',
+        [[['order_line.subscription_id', '=', id], ['state', '!=', 'cancel']]], { fields: ['x_studio_subs_order'], limit: 1, order: 'id desc' });
+      const v = so.result?.[0]?.x_studio_subs_order;
+      if (v !== undefined && v !== false) subs[id].subOrder = String(v);
+    }
+  }
+
+  // 3) Sin sale.subscription: la suscripción es el propio pedido (sale.order)
+  const orderIdByInv = {};
+  const missing = invoices.filter(inv => !subs[subIdByInv[inv.id]]);
+  const solIds = [...new Set(missing.flatMap(inv => saleLinesByMove[inv.id] || []))];
+  if (solIds.length) {
+    const sol = await odooCall(config, 'sale.order.line', 'read', [solIds], { fields: ['order_id'] });
+    const orderBySol = {};
+    (sol.result || []).forEach(l => { orderBySol[l.id] = m2oId(l.order_id); });
+    missing.forEach(inv => {
+      const id = (saleLinesByMove[inv.id] || []).map(s => orderBySol[s]).find(Boolean);
+      if (id) orderIdByInv[inv.id] = id;
     });
-    invoices.forEach(inv => {
-      const ids = [...new Set((saleLinesByMove[inv.id] || []).map(id => orderBySol[id]).filter(Boolean))];
-      inv.subscriptions = ids.map(id => subs[id]).filter(Boolean);
-    });
-  } catch (e) { console.error('[Odoo Subscriptions] Error:', e); }
+  }
+  const orders = await readSubscriptionRecords(config, 'sale.order', [...new Set(Object.values(orderIdByInv))]);
+
+  invoices.forEach(inv => {
+    const s = subs[subIdByInv[inv.id]] || orders[orderIdByInv[inv.id]];
+    if (s) inv.sub = { ...s, code: inv.x_studio_nro_suscripcion || s.code };
+  });
+  console.log('[Odoo Subscriptions] Factura → suscripción:', subIdByInv, 'Factura → pedido:', orderIdByInv);
 }
 
 function orDomain(fields, op, value) {
@@ -663,7 +693,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     case 'getStatus': getStatus().then(sendResponse); return true;
     case 'getCallLog': getCallLog().then(sendResponse); return true;
     case 'authenticate': (async () => { const c = await getConfig(); sendResponse(await authenticate(c)); })(); return true;
-    case 'updateConfig': (async () => { await saveConfig(msg.config); state.lastOdooAuth = null; state.partnerFields = null; state.subscriptionFields = null; sendResponse({ success: true }); })(); return true;
+    case 'updateConfig': (async () => { await saveConfig(msg.config); state.lastOdooAuth = null; state.partnerFields = null; state.subscriptionFields = null; state.modelFields = null; sendResponse({ success: true }); })(); return true;
     case 'testOdoo': (async () => { sendResponse(await testOdooConnection(msg.config)); })(); return true;
     case 'getConfig': (async () => { sendResponse(await getConfig()); })(); return true;
     case 'lookupInOdoo': (async () => { sendResponse(await lookupInOdoo(msg.number)); })(); return true;
@@ -682,7 +712,7 @@ async function openInOdoo(model, id, viewType) {
 }
 
 chrome.storage.onChanged.addListener((changes) => {
-  if (changes[STORAGE_KEYS.CONFIG]) { state.lastOdooAuth = null; state.partnerFields = null; state.subscriptionFields = null; state.lastLookupResult = null; }
+  if (changes[STORAGE_KEYS.CONFIG]) { state.lastOdooAuth = null; state.partnerFields = null; state.subscriptionFields = null; state.modelFields = null; state.lastLookupResult = null; }
 });
 
 chrome.runtime.onStartup.addListener(() => { state.callState = CALL_STATE.IDLE; updateBadge(); });
