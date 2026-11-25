@@ -128,9 +128,18 @@ async function getStatus() {
   };
 }
 
+// Quita el prefijo internacional de Perú con el que uContact entrega algunas llamadas:
+// 01151919630893 / 00151919630893 / 0051919630893 / 51919630893 -> 919630893
+// Tras el "51" quedan 9 dígitos (celular) u 8 (fijo con código de área).
+function normalizePhone(number) {
+  const digits = String(number || '').replace(/[^0-9]/g, '');
+  const m = digits.match(/^(?:0+1*)?51(\d{8,9})$/);
+  return m ? m[1] : digits;
+}
+
 async function lookupInOdoo(number) {
   const config = await getConfig();
-  const clean = number.replace(/[^0-9]/g, '');
+  const clean = normalizePhone(number);
   console.log('[Odoo Lookup] Looking up number:', number, 'cleaned:', clean);
   if (clean.length < 7) {
     console.log('[Odoo Lookup] Number too short');
