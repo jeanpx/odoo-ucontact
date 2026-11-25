@@ -219,7 +219,23 @@ function lookupAndShowCustomer(number, inputElement) {
 }
 
 function handleIncomingCall(number, rawData) {
-  chrome.runtime.sendMessage({ action: 'handleIncomingCall', number, extraData: rawData });
+  const digits = String(number).replace(/[^0-9]/g, '');
+  // Evita que el monitor del textarea/dialer dispare un segundo popup para el mismo número
+  lastOutputNumber = digits;
+  lastNumberLookedUp = digits;
+  hideCustomerPopup();
+  const rect = findSoftphoneRect();
+  showLoadingPopup(number, rect);
+  lookupNumber(number, (contacts) => {
+    console.log('[uContact Odoo] handleIncomingCall: lookup result:', contacts?.length || 0, 'contacts');
+    if (contacts && contacts.length > 0) {
+      showCustomerPopup(contacts, number, rect);
+    } else {
+      showNotFoundPopup(number, rect);
+    }
+    // El background reutiliza el resultado en caché para el badge, el log y la notificación
+    chrome.runtime.sendMessage({ action: 'handleIncomingCall', number, extraData: rawData }).catch(() => {});
+  });
 }
 
 function handleOutgoingCall(number, rawData) {
@@ -303,6 +319,9 @@ function showCustomerPopup(contacts, number, anchorRect) {
     : '';
 
   const hasDuplicates = contacts.length > 1;
+  const address = formatAddress(contact);
+  const totalDebt = contact._debt ? Number(contact._debt.totalDebt || 0) : 0;
+  const debtCount = contact._debt ? (contact._debt.invoiceCount || 0) : 0;
 
   popup.innerHTML = `
     <div id="ucontact-popup-header" style="cursor: move; background: linear-gradient(135deg, #009ddf, #0064b4); padding: 16px 20px; display: flex; align-items: center; gap: 12px; user-select: none;">
@@ -325,7 +344,17 @@ function showCustomerPopup(contacts, number, anchorRect) {
         ${contact.company_name ? `<div><div style="font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px;">Empresa</div><div style="font-weight: 500;">${escapeHtml(contact.company_name)}</div></div>` : ''}
         ${contact.function ? `<div><div style="font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px;">Cargo</div><div style="font-weight: 500;">${escapeHtml(contact.function)}</div></div>` : ''}
         ${contact.website ? `<div><div style="font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px;">Web</div><div style="font-weight: 500;">${escapeHtml(contact.website)}</div></div>` : ''}
+        ${address ? `<div style="grid-column: 1 / -1;"><div style="font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px;">Dirección</div><div style="font-weight: 500;">🏠 ${escapeHtml(address)}</div></div>` : ''}
       </div>
+      ${contact._debt ? (totalDebt > 0 ? `
+        <div style="margin-top: 14px; padding: 10px 14px; border-radius: 8px; background: #fdecea; display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <div style="font-size: 11px; color: #a94442; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600;">Deuda pendiente</div>
+            <div style="font-size: 11px; color: #a94442;">${debtCount} factura${debtCount === 1 ? '' : 's'} impaga${debtCount === 1 ? '' : 's'}</div>
+          </div>
+          <div style="font-size: 20px; font-weight: 700; color: #d9534f;">S/ ${totalDebt.toFixed(2)}</div>
+        </div>` : `
+        <div style="margin-top: 14px; padding: 8px 14px; border-radius: 8px; background: #eaf6ea; color: #3c763d; font-weight: 600; font-size: 13px;">✓ Sin deuda pendiente</div>`) : ''}
       <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px; min-width: 0;">
         ${contact._saleOrders && contact._saleOrders.length > 0 ? (() => {
           const debtMap = {};
@@ -335,7 +364,6 @@ function showCustomerPopup(contacts, number, anchorRect) {
               if (subId) debtMap[subId] = (debtMap[subId] || 0) + Number(inv.amount_residual || inv.amount_total || 0);
             }
           }
-          const totalDebt = contact._debt ? contact._debt.totalDebt : 0;
           function renderSubItem(item, type) {
             if (type === 'task') {
               const stageName = item.stage_id && Array.isArray(item.stage_id) ? item.stage_id[1] : '';
@@ -417,12 +445,6 @@ function showCustomerPopup(contacts, number, anchorRect) {
                 ${!hasRelated ? `<div style="color:#aaa;padding:4px 0;">Sin registros relacionados</div>` : ''}
               </div>`;
           }).join('');
-          const totalRow = totalDebt > 0 ? `
-            <div style="display: flex; gap: 12px; align-items: center; padding: 8px 0; border-top: 2px solid #f0f0f0; font-size: 13px;">
-              <div style="flex: 1;"></div>
-              <div style="width: 100px; text-align: right; font-weight: 600; color: #333;">Deuda total:</div>
-              <div style="width: 90px; text-align: right; font-size: 18px; font-weight: 700; color: #d9534f;">S/ ${totalDebt.toFixed(2)}</div>
-            </div>` : '';
           return `<div style="grid-column: 1 / -1; padding-top: 14px; border-top: 1px solid #f0f0f0; min-width: 0; overflow-wrap: break-word;">
             <div style="font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;">Suscripciones</div>
             <div style="display: flex; gap: 12px; align-items: center; padding: 4px 0; border-bottom: 1px solid #eee; font-size: 10px; color: #aaa; text-transform: uppercase; letter-spacing: 0.5px;">
@@ -431,10 +453,29 @@ function showCustomerPopup(contacts, number, anchorRect) {
               <div style="width: 90px; text-align: right;">Deuda</div>
             </div>
             ${dataRows}
-            ${totalRow}
           </div>`;
         })() : ''}
       </div>
+      ${contact._lastInvoices && contact._lastInvoices.length > 0 ? `
+        <div style="margin-top: 14px; padding-top: 14px; border-top: 1px solid #f0f0f0;">
+          <div style="font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;">Últimas facturas</div>
+          ${contact._lastInvoices.map(inv => {
+            const st = invoiceStatus(inv.payment_state);
+            const residual = Number(inv.amount_residual || 0);
+            return `<div data-invoice-id="${inv.id}" title="Clic para abrir en Odoo" style="display: flex; gap: 10px; align-items: center; padding: 6px 0; border-bottom: 1px solid #f5f5f5; font-size: 12px; cursor: pointer;">
+              <div style="flex: 1; min-width: 0;">
+                <div style="font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(inv.name)}</div>
+                <div style="font-size: 11px; color: #999;">${ld(inv.invoice_date)}${inv.invoice_date_due && residual > 0 ? ` · vence ${ld(inv.invoice_date_due)}` : ''}</div>
+              </div>
+              <div style="text-align: right;">
+                <div style="font-weight: 600;">S/ ${Number(inv.amount_total || 0).toFixed(2)}</div>
+                ${residual > 0 && residual < Number(inv.amount_total || 0) ? `<div style="font-size: 10px; color: #d9534f;">saldo S/ ${residual.toFixed(2)}</div>` : ''}
+              </div>
+              <span style="flex-shrink: 0; width: 64px; text-align: center; padding: 2px 4px; border-radius: 4px; background: ${st.bg}; color: ${st.text}; font-size: 10px; font-weight: 600;">${st.label}</span>
+            </div>`;
+          }).join('')}
+        </div>
+      ` : ''}
       ${hasDuplicates ? `
         <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #f0f0f0;">
           <div style="font-size: 11px; color: #888; margin-bottom: 6px;">Otros contactos con este número:</div>
@@ -447,6 +488,12 @@ function showCustomerPopup(contacts, number, anchorRect) {
   popup.querySelector('#ucontact-popup-close').addEventListener('click', (e) => {
     e.stopPropagation();
     removePopup(popup);
+  });
+
+  popup.querySelectorAll('[data-invoice-id]').forEach(row => {
+    row.addEventListener('click', () => {
+      chrome.runtime.sendMessage({ action: 'openInOdoo', model: 'account.move', id: parseInt(row.dataset.invoiceId), viewType: 'form' });
+    });
   });
 
   document.body.appendChild(popup);
@@ -666,6 +713,22 @@ function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = String(text);
   return div.innerHTML;
+}
+
+function formatAddress(c) {
+  if (!c) return '';
+  const name = (v) => Array.isArray(v) ? v[1] : (v || '');
+  return [c.street, c.street2, c.city, name(c.state_id)].filter(Boolean).join(', ');
+}
+
+function invoiceStatus(paymentState) {
+  switch (paymentState) {
+    case 'paid': return { label: 'Pagada', bg: '#eaf6ea', text: '#3c763d' };
+    case 'in_payment': return { label: 'En pago', bg: '#e8f4fd', text: '#0064b4' };
+    case 'partial': return { label: 'Parcial', bg: '#fff4e0', text: '#b26a00' };
+    case 'reversed': return { label: 'Revertida', bg: '#f0f0f0', text: '#777' };
+    default: return { label: 'Pendiente', bg: '#fdecea', text: '#c0392b' };
+  }
 }
 
 function stageColor(name) {

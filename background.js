@@ -9,6 +9,7 @@ let state = {
   callerInfo: null,
   lastNumberLookup: null,
   lastLookupResult: null,
+  lastLookupTime: 0,
   lastOdooAuth: null,
   lastOdooAuthTime: 0
 };
@@ -134,7 +135,7 @@ async function lookupInOdoo(number) {
     return null;
   }
 
-  if (state.lastNumberLookup === clean && state.lastLookupResult) {
+  if (state.lastNumberLookup === clean && state.lastLookupResult && (Date.now() - state.lastLookupTime < 60000)) {
     console.log('[Odoo Lookup] Using cached result');
     return state.lastLookupResult;
   }
@@ -152,6 +153,7 @@ async function lookupInOdoo(number) {
     console.log('[Odoo Lookup] Found records:', records.length);
     state.lastNumberLookup = clean;
     state.lastLookupResult = records;
+    state.lastLookupTime = Date.now();
     return records;
   }
 
@@ -200,7 +202,7 @@ async function authenticateOdoo(config) {
   return state.lastOdooAuth;
 }
 
-async function odooSearch(config, session, model, domain, fields, limit) {
+async function odooSearch(config, session, model, domain, fields, limit, order) {
   const baseUrl = config.odooUrl.replace(/\/+$/, '');
 
   const controller = new AbortController();
@@ -219,7 +221,7 @@ async function odooSearch(config, session, model, domain, fields, limit) {
           model: model,
           method: 'search_read',
           args: [domain],
-          kwargs: { fields, limit }
+          kwargs: order ? { fields, limit, order } : { fields, limit }
         }
       })
     });
@@ -307,6 +309,18 @@ async function fetchDebt(config, session, partnerId) {
   return { invoices: [], invoiceCount: 0, totalDebt: 0 };
 }
 
+async function fetchLastInvoices(config, session, partnerId) {
+  try {
+    const data = await odooSearch(config, session, 'account.move',
+      [['partner_id', '=', partnerId], ['move_type', '=', 'out_invoice'], ['state', '=', 'posted']],
+      ['name', 'invoice_date', 'invoice_date_due', 'amount_total', 'amount_residual', 'payment_state', 'currency_id'], 5,
+      'invoice_date desc, id desc'
+    );
+    if (data.result?.length > 0) return data.result;
+  } catch (e) { console.error('[Odoo Last Invoices] Error:', e); }
+  return [];
+}
+
 async function lookupViaJsonRpc(config, cleanNumber) {
   try {
     const session = await authenticateOdoo(config);
@@ -315,7 +329,7 @@ async function lookupViaJsonRpc(config, cleanNumber) {
       return [];
     }
 
-    const fields = ['id', 'name', 'phone', 'mobile', 'email', 'company_name', 'street', 'city', 'state_id', 'country_id', 'category_id', 'function', 'website'];
+    const fields = ['id', 'name', 'phone', 'mobile', 'email', 'company_name', 'street', 'street2', 'city', 'state_id', 'country_id', 'category_id', 'function', 'website'];
 
     // Generate grouped LIKE patterns to handle formatted numbers like "+51 994 390 407"
     // Each group of digits separated by % matches any characters (spaces, dashes, etc.)
@@ -356,18 +370,20 @@ async function lookupViaJsonRpc(config, cleanNumber) {
         if (valid.length > 0 && valid[0]._matchDiff <= maxDiff) {
           console.log('[Odoo Lookup] Found with pattern:', pattern, valid.length, 'matches, best diff:', valid[0]._matchDiff, 'endsWithSearch:', valid[0]._endsWithSearch, 'includesSearch:', valid[0]._includesSearch);
           const best = valid[0];
-          const [orders, tasks, tickets, customTickets, debt] = await Promise.all([
+          const [orders, tasks, tickets, customTickets, debt, lastInvoices] = await Promise.all([
             fetchSaleOrders(config, session, best.id).catch(e => { console.error('[Odoo] Orders error:', e); return []; }),
             fetchTasks(config, session, best.id).catch(e => { console.error('[Odoo] Tasks error:', e); return []; }),
             fetchTickets(config, session, best.id).catch(e => { console.error('[Odoo] Tickets error:', e); return []; }),
             fetchCustomTickets(config, session, best.id).catch(e => { console.error('[Odoo] CustomTickets error:', e); return []; }),
-            fetchDebt(config, session, best.id).catch(e => { console.error('[Odoo] Debt error:', e); return { invoiceCount: 0, totalDebt: 0 }; })
+            fetchDebt(config, session, best.id).catch(e => { console.error('[Odoo] Debt error:', e); return { invoiceCount: 0, totalDebt: 0 }; }),
+            fetchLastInvoices(config, session, best.id).catch(e => { console.error('[Odoo] Last invoices error:', e); return []; })
           ]);
           best._saleOrders = orders || [];
           best._tasks = tasks || [];
           best._tickets = tickets || [];
           best._customTickets = customTickets || [];
           best._debt = debt || { invoiceCount: 0, totalDebt: 0 };
+          best._lastInvoices = lastInvoices || [];
           return valid;
         }
         console.log('[Odoo Lookup] Pattern matched but no good match, trying next');
@@ -440,18 +456,28 @@ async function handleNumberTyped(number) {
   return [];
 }
 
+function formatAddress(c) {
+  if (!c) return '';
+  const name = (v) => Array.isArray(v) ? v[1] : (v || '');
+  return [c.street, c.street2, c.city, name(c.state_id)].filter(Boolean).join(', ');
+}
+
 function showPopupNotification(number, callerInfo) {
   const name = callerInfo?.name || 'Número desconocido';
-  const detail = callerInfo?.company_name
-    ? `${callerInfo.company_name}${callerInfo.email ? ` · ${callerInfo.email}` : ''}`
-    : (callerInfo?.email || '');
+  const lines = [number];
+  const address = formatAddress(callerInfo);
+  if (address) lines.push(address);
+  if (callerInfo?._debt) {
+    const d = Number(callerInfo._debt.totalDebt || 0);
+    lines.push(d > 0 ? `Deuda: S/ ${d.toFixed(2)} (${callerInfo._debt.invoiceCount} fact.)` : 'Sin deuda');
+  }
 
   chrome.notifications.create('incoming-call', {
     type: 'basic',
     iconUrl: 'icons/icon128.png',
     title: `📞 Llamada entrante`,
     message: `${name}`,
-    contextMessage: `${number}${detail ? `\n${detail}` : ''}`,
+    contextMessage: lines.join(' · '),
     priority: 2,
     buttons: [{ title: 'Abrir en Odoo' }, { title: 'Ignorar' }]
   }).catch(() => {});
