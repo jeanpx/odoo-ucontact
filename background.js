@@ -404,6 +404,9 @@ async function fetchLastInvoices(config, session, partnerId) {
       }
       delete inv.invoice_line_ids; delete inv.invoice_origin; delete inv.x_studio_nro_suscripcion;
     });
+    // Orden por sub order (1, 2, 3…); las que no tienen van al final. Dentro de cada uno, la más reciente primero.
+    const subNum = inv => { const n = parseInt(inv.sub?.subOrder, 10); return Number.isNaN(n) ? Infinity : n; };
+    invoices.sort((a, b) => (subNum(a) - subNum(b)) || String(b.invoice_date || '').localeCompare(String(a.invoice_date || '')) || (b.id - a.id));
     return invoices;
   } catch (e) { console.error('[Odoo Last Invoices] Error:', e); }
   return [];
