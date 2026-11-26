@@ -257,10 +257,23 @@ async function authenticateOdoo(config, force) {
 async function odooCall(config, model, method, args, kwargs, retried) {
   const baseUrl = config.odooUrl.replace(/\/+$/, '');
   const auth = state.lastOdooAuth;
+  const send = (kw) => auth?.mode === 'apikey'
+    ? postJson(`${baseUrl}/jsonrpc`, { service: 'object', method: 'execute_kw', args: [auth.db, auth.uid, auth.key, model, method, args, kw] })
+    : postJson(`${baseUrl}/web/dataset/call_kw`, { model, method, args, kwargs: kw });
 
-  const data = auth?.mode === 'apikey'
-    ? await postJson(`${baseUrl}/jsonrpc`, { service: 'object', method: 'execute_kw', args: [auth.db, auth.uid, auth.key, model, method, args, kwargs || {}] })
-    : await postJson(`${baseUrl}/web/dataset/call_kw`, { model, method, args, kwargs: kwargs || {} });
+  // Idioma del usuario de Odoo: sin él, Odoo devuelve los textos traducibles en inglés (p. ej. motivos de baja)
+  if (auth?.uid && auth.lang === undefined) {
+    auth.lang = null;
+    const u = await (auth.mode === 'apikey'
+      ? postJson(`${baseUrl}/jsonrpc`, { service: 'object', method: 'execute_kw', args: [auth.db, auth.uid, auth.key, 'res.users', 'read', [[auth.uid]], { fields: ['lang'] }] })
+      : postJson(`${baseUrl}/web/dataset/call_kw`, { model: 'res.users', method: 'read', args: [[auth.uid]], kwargs: { fields: ['lang'] } })).catch(() => null);
+    auth.lang = u?.result?.[0]?.lang || 'es_PE';
+    console.log('[Odoo Auth] Idioma para consultas:', auth.lang);
+  }
+  const kw = { ...(kwargs || {}) };
+  if (auth?.lang) kw.context = { lang: auth.lang, ...(kw.context || {}) };
+
+  const data = await send(kw);
 
   const msg = rpcError(data);
   if (msg) {
