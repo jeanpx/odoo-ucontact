@@ -358,8 +358,10 @@ async function fetchLastInvoices(config, session, partnerId) {
     const fields = ['name', 'invoice_date', 'invoice_date_due', 'amount_total', 'amount_residual', 'payment_state', 'invoice_line_ids', 'invoice_origin', 'x_studio_nro_suscripcion', stateField]
       .filter(f => f && (!moveFields || moveFields[f]));
     const data = await odooSearch(config, session, 'account.move',
-      [['commercial_partner_id', '=', partnerId], ['move_type', '=', 'out_invoice'], ['state', '=', 'posted']],
-      fields, 5, 'invoice_date desc, id desc'
+      // Solo las que debe: sin pagar o con pago parcial
+      [['commercial_partner_id', '=', partnerId], ['move_type', '=', 'out_invoice'], ['state', '=', 'posted'],
+       ['payment_state', 'not in', ['paid', 'in_payment', 'reversed']], ['amount_residual', '>', 0]],
+      fields, 10, 'invoice_date desc, id desc'
     );
     if (data.error) { console.error('[Odoo Last Invoices] Error:', data.error.message); return { error: data.error.message }; }
     if (!data.result?.length) { console.log('[Odoo Last Invoices] Sin facturas publicadas para partner', partnerId); return []; }
@@ -413,7 +415,7 @@ const m2oId = v => Array.isArray(v) ? v[0] : (v || null);
 async function fillSubOrderFromSaleOrder(config, invoices) {
   const soFields = await modelFields(config, 'sale.order');
   if (!soFields?.x_studio_subs_order) { console.log('[Odoo Subscriptions] sale.order sin x_studio_subs_order (o sin acceso):', !!soFields); return; }
-  const pending = invoices.filter(inv => !inv.sub.subOrder && (inv.sub.code || inv.invoice_origin));
+  const pending = invoices.filter(inv => (!inv.sub.subOrder || !inv.sub.orderId) && (inv.sub.code || inv.invoice_origin));
   if (!pending.length) return;
   const codes = [...new Set(pending.map(inv => String(inv.sub.code || '')).filter(Boolean))];
   const origins = [...new Set(pending.map(inv => inv.invoice_origin).filter(Boolean))];
@@ -430,6 +432,7 @@ async function fillSubOrderFromSaleOrder(config, invoices) {
     || (data.result || []).find(o => inv.sub.code && [o.name, o.client_order_ref].some(n => n && String(n).includes(String(inv.sub.code))));
   pending.forEach(inv => {
     const o = find(inv);
+    if (o && !inv.sub.orderId) inv.sub.orderId = o.id;
     if (o && o.x_studio_subs_order !== false && o.x_studio_subs_order != null) inv.sub.subOrder = String(o.x_studio_subs_order);
   });
   console.log('[Odoo Subscriptions] Sub order desde sale.order:', (data.result || []).map(o => `${o.name}=${o.x_studio_subs_order}`));
@@ -463,6 +466,7 @@ async function readSubscriptionRecords(config, model, ids) {
       code: show('code', r.code),
       state: show('stage_id', r.stage_id) || show('subscription_state', r.subscription_state),
       reason: show('close_reason_id', r.close_reason_id),
+      orderId: model === 'sale.order' ? r.id : null,
       startDate: r.start_date || '',
       suspDate: r.x_studio_fecha_suspension || ''
     };

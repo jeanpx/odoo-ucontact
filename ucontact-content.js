@@ -205,7 +205,6 @@ function showCustomerPopup(contacts, number, anchorRect) {
 
   const shown = contacts.slice(0, 2);
   const label = 'font-size:11px;color:#9aa0a6;text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px;';
-  const anyDebt = shown.some(c => c._debt && Number(c._debt.totalDebt || 0) > 0);
 
   const headerOf = (contact) => {
     const docType = Array.isArray(contact.l10n_latam_identification_type_id) ? contact.l10n_latam_identification_type_id[1] : 'DNI';
@@ -220,7 +219,8 @@ function showCustomerPopup(contacts, number, anchorRect) {
   const invoiceCard = (inv) => {
     const st = invoiceStatus(inv.payment_state);
     const lines = inv.lines || [];
-    return `<div data-invoice-id="${inv.id}" title="${st.label} · Abrir en Odoo" style="background:#f8f9fb;border:1px solid #e3e6eb;border-radius:10px;padding:10px 12px;margin-bottom:8px;cursor:pointer;transition:background .15s;">
+    const subId = inv.sub && inv.sub.orderId;
+    return `<div data-invoice-id="${inv.id}" ${subId ? `data-sub-id="${subId}"` : ''} title="${subId ? 'Abrir suscripción en Odoo' : 'Abrir factura en Odoo'}" style="background:#f8f9fb;border:1px solid #e3e6eb;border-radius:10px;padding:10px 12px;margin-bottom:8px;cursor:pointer;transition:background .15s;">
       <div style="display:flex;align-items:center;gap:8px;">
         <span style="width:8px;height:8px;border-radius:50%;background:${st.text};flex-shrink:0;"></span>
         <span style="flex:1;min-width:0;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(inv.name)}</span>
@@ -268,89 +268,93 @@ function showCustomerPopup(contacts, number, anchorRect) {
       })()}
 
       <div style="padding-top:10px;border-top:1px solid #f1f3f4;">
-        <div style="${label}">Últimas facturas</div>
+        <div style="${label}">Facturas pendientes</div>
         ${invoices.length
           ? invoices.map(invoiceCard).join('')
-          : `<div style="font-size:12px;color:${contact._invoicesError ? '#d93025' : '#9aa0a6'};padding-bottom:6px;">${contact._invoicesError ? 'No se pudieron cargar las facturas: ' + escapeHtml(contact._invoicesError) : 'Sin facturas registradas'}</div>`}
+          : `<div style="font-size:12px;color:${contact._invoicesError ? '#d93025' : '#9aa0a6'};padding-bottom:6px;">${contact._invoicesError ? 'No se pudieron cargar las facturas: ' + escapeHtml(contact._invoicesError) : 'Sin facturas pendientes'}</div>`}
       </div>`;
   };
 
-  const legend = shown.some(c => (c._lastInvoices || []).length) ? `
+  const legend = `
     <div style="display:flex;gap:12px;margin-top:6px;font-size:11px;color:#9aa0a6;">
-      ${['paid', 'partial', 'not_paid'].map(k => { const s = invoiceStatus(k); return `<span><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${s.text};margin-right:4px;vertical-align:middle;"></span>${s.label}</span>`; }).join('')}
-    </div>` : '';
+      ${['partial', 'not_paid'].map(k => { const s = invoiceStatus(k); return `<span><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${s.text};margin-right:4px;vertical-align:middle;"></span>${s.label}</span>`; }).join('')}
+    </div>`;
 
-  const multi = shown.length > 1;
+  // Una ventana independiente por cliente (máx. 2), cada una movible y con su propio cierre
+  const popups = shown.map((contact) => {
+    const hasDebt = contact._debt && Number(contact._debt.totalDebt || 0) > 0;
+    const popup = document.createElement('div');
+    popup.className = 'ucontact-odoo-popup';
+    popup.style.cssText = `
+      position: fixed; z-index: 2147483647; width: 340px; max-height: calc(100vh - 40px);
+      background: #fff; border-radius: 10px; border-top: 3px solid ${hasDebt ? '#d93025' : '#1e8e3e'};
+      box-shadow: 0 6px 24px rgba(0,0,0,.16);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 13px; color: #202124; line-height: 1.4;
+      overflow-y: auto; overflow-x: hidden; animation: ucontactPopupIn .2s ease-out;
+    `;
 
-  const popup = document.createElement('div');
-  popup.id = 'ucontact-odoo-popup';
-  popup.style.cssText = `
-    position: fixed; z-index: 2147483647; width: 340px; max-height: calc(100vh - 40px);
-    background: #fff; border-radius: 10px; border-top: 3px solid ${anyDebt ? '#d93025' : '#1e8e3e'};
-    box-shadow: 0 6px 24px rgba(0,0,0,.16);
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    font-size: 13px; color: #202124; line-height: 1.4;
-    overflow-y: auto; overflow-x: hidden; animation: ucontactPopupIn .2s ease-out;
-  `;
-
-  popup.innerHTML = `
-    <div id="ucontact-popup-header" style="cursor:move;user-select:none;padding:14px 16px 10px;display:flex;gap:8px;align-items:flex-start;">
-      <div style="flex:1;min-width:0;">
-        ${multi
-          ? `<div style="font-size:12px;font-weight:600;color:#5f6368;">${shown.length} contactos con este número</div>`
-          : headerOf(shown[0])}
+    popup.innerHTML = `
+      <div class="ucontact-popup-header" style="cursor:move;user-select:none;padding:14px 16px 10px;display:flex;gap:8px;align-items:flex-start;">
+        <div style="flex:1;min-width:0;">${headerOf(contact)}</div>
+        <button class="ucontact-popup-close" title="Cerrar" style="background:none;border:none;color:#9aa0a6;font-size:16px;cursor:pointer;padding:0 2px;line-height:1;">✕</button>
       </div>
-      <button id="ucontact-popup-close" title="Cerrar" style="background:none;border:none;color:#9aa0a6;font-size:16px;cursor:pointer;padding:0 2px;line-height:1;">✕</button>
-    </div>
+      <div style="padding:0 16px 14px;">
+        ${bodyOf(contact)}
+        ${(contact._lastInvoices || []).length ? legend : ''}
+      </div>
+    `;
 
-    <div style="padding:0 16px 14px;">
-      ${multi
-        ? shown.map(c => `
-          <div style="border:1px solid #e3e6eb;border-radius:12px;padding:12px 12px 4px;margin-bottom:10px;">
-            <div style="padding-bottom:8px;">${headerOf(c)}</div>
-            ${bodyOf(c)}
-          </div>`).join('')
-        : bodyOf(shown[0])}
-      ${legend}
-    </div>
-  `;
-
-  popup.querySelector('#ucontact-popup-close').addEventListener('click', (e) => {
-    e.stopPropagation();
-    removePopup(popup);
-  });
-
-  popup.querySelectorAll('[data-invoice-id]').forEach(row => {
-    row.addEventListener('mouseenter', () => { row.style.background = '#eef1f5'; });
-    row.addEventListener('mouseleave', () => { row.style.background = '#f8f9fb'; });
-    row.addEventListener('click', () => {
-      chrome.runtime.sendMessage({ action: 'openInOdoo', model: 'account.move', id: parseInt(row.dataset.invoiceId), viewType: 'form' });
+    popup.querySelector('.ucontact-popup-close').addEventListener('click', (e) => {
+      e.stopPropagation();
+      removePopup(popup);
     });
+
+    popup.querySelectorAll('[data-invoice-id]').forEach(row => {
+      row.addEventListener('mouseenter', () => { row.style.background = '#eef1f5'; });
+      row.addEventListener('mouseleave', () => { row.style.background = '#f8f9fb'; });
+      row.addEventListener('click', () => {
+        const subId = parseInt(row.dataset.subId);
+        chrome.runtime.sendMessage(subId
+          ? { action: 'openInOdoo', model: 'sale.order', id: subId, viewType: 'form' }
+          : { action: 'openInOdoo', model: 'account.move', id: parseInt(row.dataset.invoiceId), viewType: 'form' });
+      });
+    });
+
+    document.body.appendChild(popup);
+
+    const header = popup.querySelector('.ucontact-popup-header');
+    let isDragging = false, dragStartX, dragStartY, origX, origY;
+    header.addEventListener('mousedown', (e) => {
+      if (e.target.closest('.ucontact-popup-close')) return;
+      isDragging = true;
+      const rect = popup.getBoundingClientRect();
+      origX = rect.left; origY = rect.top;
+      dragStartX = e.clientX; dragStartY = e.clientY;
+      popup.style.animation = 'none';
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      popup.style.left = (origX + (e.clientX - dragStartX)) + 'px';
+      popup.style.top = (origY + (e.clientY - dragStartY)) + 'px';
+    });
+    document.addEventListener('mouseup', () => { isDragging = false; });
+
+    activePopups.push(popup);
+    return popup;
   });
 
-  document.body.appendChild(popup);
-
-  // Make popup draggable via header
-  const header = popup.querySelector('#ucontact-popup-header');
-  let isDragging = false, dragStartX, dragStartY, origX, origY;
-  header.addEventListener('mousedown', (e) => {
-    if (e.target.closest('#ucontact-popup-close')) return;
-    isDragging = true;
-    const rect = popup.getBoundingClientRect();
-    origX = rect.left; origY = rect.top;
-    dragStartX = e.clientX; dragStartY = e.clientY;
-    popup.style.animation = 'none';
-    e.preventDefault();
-  });
-  document.addEventListener('mousemove', (e) => {
-    if (!isDragging) return;
-    popup.style.left = (origX + (e.clientX - dragStartX)) + 'px';
-    popup.style.top = (origY + (e.clientY - dragStartY)) + 'px';
-  });
-  document.addEventListener('mouseup', () => { isDragging = false; });
-
-  positionPopup(popup, anchorRect);
-  activePopups.push(popup);
+  // La primera junto al softphone; la segunda a su lado (izquierda, o derecha si no cabe)
+  positionPopup(popups[0], anchorRect);
+  if (popups[1]) {
+    const first = popups[0].getBoundingClientRect();
+    const gap = 12, w = popups[1].offsetWidth;
+    let left = first.left - w - gap;
+    if (left < gap) left = Math.min(first.right + gap, window.innerWidth - w - gap);
+    popups[1].style.top = `${first.top}px`;
+    popups[1].style.left = `${Math.max(gap, left)}px`;
+  }
 }
 
 function positionPopup(popup, anchorRect) {
