@@ -255,12 +255,17 @@ function showCustomerPopup(contacts, number, anchorRect) {
           ${addresses.map(a => `<div>${escapeHtml(a)}</div>`).join('')}
         </div>` : ''}
 
-      <div style="padding:10px 0;border-top:1px solid #f1f3f4;display:flex;justify-content:space-between;align-items:baseline;">
-        <div style="${label}margin:0;">Deuda</div>
-        <div style="text-align:right;">
-          <span style="font-size:16px;font-weight:600;color:${totalDebt > 0 ? '#d93025' : '#1e8e3e'};">S/ ${totalDebt.toFixed(2)}</span>
-        </div>
-      </div>
+      ${(() => {
+        // Rojo: debe · Amarillo: pago parcial · Verde: sin deuda
+        const partial = totalDebt > 0 && ((contact._debt && contact._debt.invoices) || []).some(i => i.payment_state === 'partial');
+        const c = totalDebt <= 0 ? { line: '#1e8e3e', bg: '#e6f4ea', text: '#1e8e3e', tag: '' }
+          : partial ? { line: '#f29900', bg: '#fef7e0', text: '#b06000', tag: 'Parcial' }
+          : { line: '#d93025', bg: '#fce8e6', text: '#d93025', tag: '' };
+        return `<div style="margin:10px 0;padding:10px 12px;border:2px solid ${c.line};background:${c.bg};border-radius:10px;display:flex;justify-content:space-between;align-items:center;">
+          <div style="${label}margin:0;color:${c.text};">Deuda${c.tag ? ` · ${c.tag}` : ''}</div>
+          <span style="font-size:16px;font-weight:700;color:${c.text};">S/ ${totalDebt.toFixed(2)}</span>
+        </div>`;
+      })()}
 
       <div style="padding-top:10px;border-top:1px solid #f1f3f4;">
         <div style="${label}">Últimas facturas</div>
