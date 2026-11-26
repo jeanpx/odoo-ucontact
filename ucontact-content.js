@@ -251,7 +251,7 @@ function showCustomerPopup(contacts, number, anchorRect) {
     return `
       ${addresses.length ? `
         <div style="padding:10px 0;border-top:1px solid #f1f3f4;">
-          <div style="${label}">Dirección</div>
+          <div style="${label}">${addresses.length > 1 ? `Direcciones (${addresses.length})` : 'Dirección'}</div>
           ${addresses.map(a => `<div>${escapeHtml(a)}</div>`).join('')}
         </div>` : ''}
 
