@@ -621,8 +621,9 @@ async function lookupViaJsonRpc(config, cleanNumber) {
         valid.sort((a, b) => ((invCount[m2oId(b.commercial_partner_id) || b.id] ? 1 : 0) - (invCount[m2oId(a.commercial_partner_id) || a.id] ? 1 : 0)) || (rank.get(a.id) - rank.get(b.id)));
       }
       console.log('[Odoo Lookup] Found', valid.length, 'matches:', valid.map(c => `${c.name} (#${c.id}, facturas: ${invCount[m2oId(c.commercial_partner_id) || c.id] || 0})`));
-      // Hasta 2 contactos con el mismo número, cada uno con su deuda y facturas
+      // Se devuelven todos; solo los 2 primeros se cargan con su deuda y facturas
       const top = valid.slice(0, 2);
+      valid.forEach(c => { c._hasInvoices = !!invCount[m2oId(c.commercial_partner_id) || c.id]; });
       await Promise.all(top.map(async (c) => {
         const [orders, debt, lastInvoices] = await Promise.all([
           fetchSaleOrders(config, session, c.id).catch(e => { console.error('[Odoo] Orders error:', e); return []; }),
@@ -634,7 +635,7 @@ async function lookupViaJsonRpc(config, cleanNumber) {
         c._invoicesError = lastInvoices?.error || null;
         c._lastInvoices = Array.isArray(lastInvoices) ? lastInvoices : [];
       }));
-      return top;
+      return valid;
     }
 
     console.log('[Odoo Lookup] No matches found');

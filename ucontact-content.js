@@ -351,39 +351,89 @@ function showCustomerPopup(contacts, number, anchorRect) {
     });
 
     document.body.appendChild(popup);
-
-    const header = popup.querySelector('.ucontact-popup-header');
-    let isDragging = false, dragStartX, dragStartY, origX, origY;
-    header.addEventListener('mousedown', (e) => {
-      if (e.target.closest('.ucontact-popup-close')) return;
-      isDragging = true;
-      const rect = popup.getBoundingClientRect();
-      origX = rect.left; origY = rect.top;
-      dragStartX = e.clientX; dragStartY = e.clientY;
-      popup.style.animation = 'none';
-      e.preventDefault();
-    });
-    document.addEventListener('mousemove', (e) => {
-      if (!isDragging) return;
-      popup.style.left = (origX + (e.clientX - dragStartX)) + 'px';
-      popup.style.top = (origY + (e.clientY - dragStartY)) + 'px';
-    });
-    document.addEventListener('mouseup', () => { isDragging = false; });
-
+    makePopupDraggable(popup);
     activePopups.push(popup);
     return popup;
   });
 
-  // La primera junto al softphone; la segunda a su lado (izquierda, o derecha si no cabe)
+  // Más de 2 contactos con el mismo número: ventana aparte con la lista completa
+  if (contacts.length > 2) popups.push(contactListPopup(contacts, number, shown.length));
+
+  // La primera junto al softphone; las demás a su lado (izquierda, o derecha si no cabe)
   positionPopup(popups[0], anchorRect);
-  if (popups[1]) {
-    const first = popups[0].getBoundingClientRect();
-    const gap = 12, w = popups[1].offsetWidth;
-    let left = first.left - w - gap;
-    if (left < gap) left = Math.min(first.right + gap, window.innerWidth - w - gap);
-    popups[1].style.top = `${first.top}px`;
-    popups[1].style.left = `${Math.max(gap, left)}px`;
+  const gap = 12;
+  for (let i = 1; i < popups.length; i++) {
+    const prev = popups[i - 1].getBoundingClientRect();
+    const w = popups[i].offsetWidth;
+    let left = prev.left - w - gap;
+    if (left < gap) left = Math.min(prev.right + gap, window.innerWidth - w - gap);
+    popups[i].style.top = `${prev.top}px`;
+    popups[i].style.left = `${Math.max(gap, left)}px`;
   }
+}
+
+function contactListPopup(contacts, number, shownCount) {
+  const popup = document.createElement('div');
+  popup.className = 'ucontact-odoo-popup';
+  popup.style.cssText = `
+    position: fixed; z-index: 2147483647; width: 300px; max-height: calc(100vh - 40px);
+    background: #fff; border-radius: 10px; border-top: 3px solid #f29900;
+    box-shadow: 0 6px 24px rgba(0,0,0,.16);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 13px; color: #202124; line-height: 1.4;
+    overflow-y: auto; overflow-x: hidden; animation: ucontactPopupIn .2s ease-out;
+  `;
+  const rows = contacts.map((c, i) => {
+    const docType = Array.isArray(c.l10n_latam_identification_type_id) ? c.l10n_latam_identification_type_id[1] : 'DNI';
+    const meta = [c.vat ? `${docType} ${c.vat}` : '', c.mobile || c.phone || ''].filter(Boolean);
+    const tags = [i < shownCount ? 'En pantalla' : '', c._hasInvoices ? 'Con facturas' : ''].filter(Boolean);
+    return `<div data-partner-id="${c.id}" title="Abrir contacto en Odoo" style="background:#f8f9fb;border:1px solid #e3e6eb;border-radius:10px;padding:8px 10px;margin-bottom:6px;cursor:pointer;transition:background .15s;">
+      <div style="font-weight:700;">${escapeHtml(c.name || '')}</div>
+      ${meta.length ? `<div style="font-size:12px;color:#5f6368;">${meta.map(escapeHtml).join(' · ')}</div>` : ''}
+      ${tags.length ? `<div style="margin-top:4px;display:flex;gap:4px;">${tags.map(t => `<span style="font-size:10px;padding:1px 6px;border-radius:8px;background:${t === 'En pantalla' ? '#e8f0fe;color:#1967d2' : '#e6f4ea;color:#1e8e3e'};">${t}</span>`).join('')}</div>` : ''}
+    </div>`;
+  }).join('');
+
+  popup.innerHTML = `
+    <div class="ucontact-popup-header" style="cursor:move;user-select:none;padding:14px 16px 10px;display:flex;gap:8px;align-items:flex-start;">
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:15px;font-weight:600;">${contacts.length} contactos con este número</div>
+        <div style="font-size:12px;color:#5f6368;margin-top:2px;">${escapeHtml(number || '')}</div>
+      </div>
+      <button class="ucontact-popup-close" title="Cerrar" style="background:none;border:none;color:#9aa0a6;font-size:16px;cursor:pointer;padding:0 2px;line-height:1;">✕</button>
+    </div>
+    <div style="padding:0 16px 14px;">${rows}</div>
+  `;
+  popup.querySelector('.ucontact-popup-close').addEventListener('click', (e) => { e.stopPropagation(); removePopup(popup); });
+  popup.querySelectorAll('[data-partner-id]').forEach(row => {
+    row.addEventListener('mouseenter', () => { row.style.background = '#eef1f5'; });
+    row.addEventListener('mouseleave', () => { row.style.background = '#f8f9fb'; });
+    row.addEventListener('click', () => chrome.runtime.sendMessage({ action: 'openInOdoo', model: 'res.partner', id: parseInt(row.dataset.partnerId), viewType: 'form' }));
+  });
+  document.body.appendChild(popup);
+  makePopupDraggable(popup);
+  activePopups.push(popup);
+  return popup;
+}
+
+function makePopupDraggable(popup) {
+  const header = popup.querySelector('.ucontact-popup-header');
+  let isDragging = false, dragStartX, dragStartY, origX, origY;
+  header.addEventListener('mousedown', (e) => {
+    if (e.target.closest('.ucontact-popup-close')) return;
+    isDragging = true;
+    const rect = popup.getBoundingClientRect();
+    origX = rect.left; origY = rect.top;
+    dragStartX = e.clientX; dragStartY = e.clientY;
+    popup.style.animation = 'none';
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+    popup.style.left = (origX + (e.clientX - dragStartX)) + 'px';
+    popup.style.top = (origY + (e.clientY - dragStartY)) + 'px';
+  });
+  document.addEventListener('mouseup', () => { isDragging = false; });
 }
 
 function positionPopup(popup, anchorRect) {
