@@ -219,8 +219,10 @@ function showCustomerPopup(contacts, number, anchorRect) {
   const invoiceCard = (inv) => {
     const st = invoiceStatus(inv.payment_state);
     const lines = inv.lines || [];
-    const subId = inv.sub && inv.sub.orderId;
-    return `<div data-invoice-id="${inv.id}" ${subId ? `data-sub-id="${subId}"` : ''} title="${subId ? 'Abrir suscripción en Odoo' : 'Abrir factura en Odoo'}" style="background:#f8f9fb;border:1px solid #e3e6eb;border-radius:10px;padding:10px 12px;margin-top:8px;cursor:pointer;transition:background .15s;">
+    const s = inv.sub || {};
+    const subId = s.subscriptionId || s.orderId;
+    const subModel = s.subscriptionId ? 'sale.subscription' : 'sale.order';
+    return `<div data-invoice-id="${inv.id}" ${subId ? `data-sub-id="${subId}" data-sub-model="${subModel}"` : ''} title="${subId ? 'Abrir suscripción en Odoo' : 'Abrir factura en Odoo'}" style="background:#f8f9fb;border:1px solid #e3e6eb;border-radius:10px;padding:10px 12px;margin-top:8px;cursor:pointer;transition:background .15s;">
       <div style="display:flex;align-items:center;gap:8px;">
         <span title="${st.label}" style="width:8px;height:8px;border-radius:50%;background:${st.text};flex-shrink:0;"></span>
         <span style="flex:1;min-width:0;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(inv.name)}</span>
@@ -343,7 +345,7 @@ function showCustomerPopup(contacts, number, anchorRect) {
       row.addEventListener('click', () => {
         const subId = parseInt(row.dataset.subId);
         chrome.runtime.sendMessage(subId
-          ? { action: 'openInOdoo', model: 'sale.order', id: subId, viewType: 'form' }
+          ? { action: 'openSubscription', model: row.dataset.subModel, id: subId }
           : { action: 'openInOdoo', model: 'account.move', id: parseInt(row.dataset.invoiceId), viewType: 'form' });
       });
     });

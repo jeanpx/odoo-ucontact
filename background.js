@@ -470,6 +470,7 @@ async function readSubscriptionRecords(config, model, ids) {
       state: show('stage_id', r.stage_id) || show('subscription_state', r.subscription_state),
       reason: show('close_reason_id', r.close_reason_id),
       orderId: model === 'sale.order' ? r.id : null,
+      subscriptionId: model === 'sale.subscription' ? r.id : null,
       startDate: r.start_date || '',
       suspDate: r.x_studio_fecha_suspension || ''
     };
@@ -785,8 +786,39 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     case 'handleIncomingCall': (async () => { await handleIncomingCall(msg.number, msg.extraData); sendResponse({ success: true }); })(); return true;
     case 'callState': sendResponse(state); return true;
     case 'openInOdoo': openInOdoo(msg.model, msg.id, msg.viewType); return true;
+    case 'openSubscription': openSubscription(msg.model, msg.id); return true;
   }
 });
+
+// Abre la suscripción dentro de la app Suscripciones (su acción), no como pedido del módulo Ventas
+async function openSubscription(model, id) {
+  const config = await getConfig();
+  if (!config.odooUrl || !id) return;
+  let actionId = null;
+  try { actionId = await subscriptionActionId(config, model); }
+  catch (e) { console.log('[Odoo Subscriptions] No se pudo obtener la acción de suscripciones:', e); }
+  chrome.tabs.create({ url: `${config.odooUrl.replace(/\/+$/, '')}/web#id=${id}&model=${model}&view_type=form${actionId ? `&action=${actionId}` : ''}` });
+}
+
+async function subscriptionActionId(config, model) {
+  state.subActions = state.subActions || {};
+  if (model in state.subActions) return state.subActions[model];
+  let id = null;
+  // 1) La acción estándar del módulo sale_subscription
+  const xml = await odooCall(config, 'ir.model.data', 'search_read',
+    [[['module', '=', 'sale_subscription'], ['model', '=', 'ir.actions.act_window'], ['name', 'in', ['sale_subscription_action', 'sale_subscription_action_view']]]],
+    { fields: ['res_id'], limit: 1 });
+  if (xml.result?.[0]?.res_id) id = xml.result[0].res_id;
+  // 2) Si no, cualquier acción del modelo llamada "Suscripciones"
+  if (!id) {
+    const act = await odooCall(config, 'ir.actions.act_window', 'search_read',
+      [[['res_model', '=', model], ['name', 'ilike', 'suscrip']]], { fields: ['id', 'name'], limit: 1, order: 'id' });
+    id = act.result?.[0]?.id || null;
+  }
+  console.log('[Odoo Subscriptions] Acción de suscripciones para', model, '→', id);
+  state.subActions[model] = id;
+  return id;
+}
 
 async function openInOdoo(model, id, viewType) {
   const config = await getConfig();
