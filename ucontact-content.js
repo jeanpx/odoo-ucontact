@@ -220,26 +220,53 @@ function showCustomerPopup(contacts, number, anchorRect) {
     const st = invoiceStatus(inv.payment_state);
     const lines = inv.lines || [];
     const subId = inv.sub && inv.sub.orderId;
-    return `<div data-invoice-id="${inv.id}" ${subId ? `data-sub-id="${subId}"` : ''} title="${subId ? 'Abrir suscripción en Odoo' : 'Abrir factura en Odoo'}" style="background:#f8f9fb;border:1px solid #e3e6eb;border-radius:10px;padding:10px 12px;margin-bottom:8px;cursor:pointer;transition:background .15s;">
+    return `<div data-invoice-id="${inv.id}" ${subId ? `data-sub-id="${subId}"` : ''} title="${subId ? 'Abrir suscripción en Odoo' : 'Abrir factura en Odoo'}" style="background:#f8f9fb;border:1px solid #e3e6eb;border-radius:10px;padding:10px 12px;margin-top:8px;cursor:pointer;transition:background .15s;">
       <div style="display:flex;align-items:center;gap:8px;">
-        <span style="width:8px;height:8px;border-radius:50%;background:${st.text};flex-shrink:0;"></span>
+        <span title="${st.label}" style="width:8px;height:8px;border-radius:50%;background:${st.text};flex-shrink:0;"></span>
         <span style="flex:1;min-width:0;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(inv.name)}</span>
         <span style="font-weight:700;">S/ ${Number(inv.amount_total || 0).toFixed(2)}</span>
       </div>
       ${lines.map(l => `<div style="color:#5f6368;font-size:12px;margin:4px 0 0 16px;">${escapeHtml(l)}</div>`).join('')}
-      ${inv.sub && (inv.sub.subOrder || inv.sub.code || inv.sub.state || inv.sub.reason) ? `
-        <div style="display:grid;grid-template-columns:1fr 1.4fr 1.2fr;gap:4px;margin:8px 0 0 16px;padding-top:8px;border-top:1px solid #e3e6eb;font-size:11px;">
-          ${[['Sub order', inv.sub.subOrder], ['Cod. suscripción', inv.sub.code], ['Estado sus.', inv.sub.state]]
-            .map(([k, v]) => `<div style="min-width:0;"><div style="color:#9aa0a6;">${k}</div><div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(String(v || '—'))}</div></div>`).join('')}
-        </div>
-        ${inv.sub.reason && !/activ|progres|curso/i.test(inv.sub.state || '') ? `<div style="margin:6px 0 0 16px;font-size:11px;"><span style="color:#9aa0a6;">Motivo de baja:</span> <span style="font-weight:600;">${escapeHtml(inv.sub.reason)}</span></div>` : ''}` : ''}
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin:8px 0 0 16px;padding-top:8px;border-top:1px solid #e3e6eb;font-size:11px;">
-        ${[
-          ['Inicio', ld(inv.sub && inv.sub.startDate) || '—', '#202124'],
-          ['Susp/Baja', ld(inv.sub && inv.sub.suspDate) || '—', '#202124'],
-          ['Meses', subscriptionMonths(inv.sub), '#202124'],
-          ['Estado', st.label, st.text]
-        ].map(([k, v, c]) => `<div style="min-width:0;"><div style="color:#9aa0a6;">${k}</div><div style="font-weight:600;color:${c};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(v)}</div></div>`).join('')}
+    </div>`;
+  };
+
+  // Agrupa las facturas por suscripción: los datos de la suscripción se muestran una sola vez
+  const groupInvoices = (invoices) => {
+    const groups = [];
+    const byKey = {};
+    invoices.forEach(inv => {
+      const s = inv.sub || {};
+      const key = s.code ? `c${s.code}|${s.subOrder || ''}` : s.orderId ? `o${s.orderId}` : `i${inv.id}`;
+      if (!byKey[key]) groups.push(byKey[key] = { sub: s, invoices: [] });
+      byKey[key].invoices.push(inv);
+    });
+    return groups;
+  };
+
+  const subscriptionCard = ({ sub, invoices }) => {
+    const owed = invoices.reduce((t, i) => t + Number(i.amount_residual != null ? i.amount_residual : i.amount_total || 0), 0);
+    const cell = (v, c = '#202124') => `<div style="min-width:0;font-weight:700;color:${c};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(String(v || '—'))}</div>`;
+    const showReason = sub.reason && !/activ|progres|curso/i.test(sub.state || '');
+    const details = [
+      ['Inicio', ld(sub.startDate) || '—'],
+      ['Susp/Baja', ld(sub.suspDate) || '—'],
+      ['Meses', subscriptionMonths(sub)],
+      ...(showReason ? [['Motivo de baja', sub.reason]] : [])
+    ];
+    const cols = 'grid-template-columns:.8fr 1.1fr 1fr 1.1fr;gap:6px;';
+    return `<div style="border:1px solid #e3e6eb;border-radius:12px;padding:10px 12px;margin-bottom:10px;background:#fff;">
+      <div style="display:grid;${cols}font-size:10px;color:#9aa0a6;text-transform:uppercase;letter-spacing:.3px;line-height:1.25;padding-bottom:6px;border-bottom:1px solid #e3e6eb;">
+        <div>Sub order</div><div>Cod suscripción</div><div>Estado sus.</div><div>Importe adeudado</div>
+      </div>
+      <div style="display:grid;${cols}font-size:12px;padding-top:6px;">
+        ${cell(sub.subOrder)}${cell(sub.code)}${cell(sub.state)}${cell(`S/ ${owed.toFixed(2)}`, '#d93025')}
+      </div>
+      ${invoices.map(invoiceCard).join('')}
+      <div style="margin-top:8px;background:#f8f9fb;border:1px solid #e3e6eb;border-radius:10px;padding:8px 12px;font-size:12px;">
+        ${details.map(([k, v]) => `<div style="display:flex;justify-content:space-between;gap:10px;padding:2px 0;">
+          <span style="color:#5f6368;white-space:nowrap;">${k}</span>
+          <span style="font-weight:700;text-align:right;min-width:0;">${escapeHtml(String(v))}</span>
+        </div>`).join('')}
       </div>
     </div>`;
   };
@@ -270,7 +297,7 @@ function showCustomerPopup(contacts, number, anchorRect) {
       <div style="padding-top:10px;border-top:1px solid #f1f3f4;">
         <div style="${label}">Facturas pendientes</div>
         ${invoices.length
-          ? invoices.map(invoiceCard).join('')
+          ? groupInvoices(invoices).map(subscriptionCard).join('')
           : `<div style="font-size:12px;color:${contact._invoicesError ? '#d93025' : '#9aa0a6'};padding-bottom:6px;">${contact._invoicesError ? 'No se pudieron cargar las facturas: ' + escapeHtml(contact._invoicesError) : 'Sin facturas pendientes'}</div>`}
       </div>`;
   };
